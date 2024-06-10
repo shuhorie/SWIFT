@@ -32,8 +32,10 @@ doc/RTD/source/RadiativeTransfer/full_dependency_graph_RT.png
 examples/*/*/*.xmf
 examples/*/*/*.dat
 examples/*/*/*.png
+examples/*/*/fig/*.png
 examples/*/*/*.pdf
 examples/*/*/*.mp4
+examples/*/*/fig/*.mp4
 examples/*/*/*.txt
 examples/*/*/*.rst
 examples/*/*/*.hdf5
