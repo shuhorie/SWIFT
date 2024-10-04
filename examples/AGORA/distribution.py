@@ -199,7 +199,7 @@ if __name__ == "__main__":
 
     SNAPSHOT_DIR = "./snapshot"
 
-    FIG_DIR = './fig'
+    FIG_DIR = './fig/distribution'
     if not os.path.exists(FIG_DIR):
         os.makedirs(FIG_DIR)
 
