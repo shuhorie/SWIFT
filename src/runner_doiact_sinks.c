@@ -1,7 +1,9 @@
 /*******************************************************************************
  * This file is part of SWIFT.
- * Copyright (c) 2016 Bert Vandenbroucke (bert.vandenbroucke@gmail.com).
- *
+ * Copyright (c) 2012 Pedro Gonnet (pedro.gonnet@durham.ac.uk)
+ *                    Matthieu Schaller (schaller@strw.leidenuniv.nl)
+ *               2015 Peter W. Draper (p.w.draper@durham.ac.uk)
+ *               2024 Jonathan Davies (j.j.davies@ljmu.ac.uk)
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
  * by the Free Software Foundation, either version 3 of the License, or
@@ -17,17 +19,20 @@
  *
  ******************************************************************************/
 
-#ifndef SWIFT_VORONOI_ALGORITHM_H
-#define SWIFT_VORONOI_ALGORITHM_H
+/* Config parameters. */
+#include <config.h>
 
-#if defined(HYDRO_DIMENSION_1D)
-#include "voronoi1d_algorithm.h"
-#elif defined(HYDRO_DIMENSION_2D)
-#include "voronoi2d_algorithm.h"
-#elif defined(HYDRO_DIMENSION_3D)
-#include "voronoi3d_algorithm.h"
-#else
-#error "You have to select a dimension for the hydro!"
-#endif
+/* Local headers. */
+#include "active.h"
+#include "cell.h"
+#include "engine.h"
+#include "runner.h"
+#include "sink_iact.h"
+#include "space_getsid.h"
+#include "timers.h"
 
-#endif  // SWIFT_VORONOI_ALGORITHM_H
+/* Import the sink swallow loop functions. */
+#define FUNCTION swallow
+#define FUNCTION_TASK_LOOP TASK_LOOP_SWALLOW
+#include "runner_doiact_functions_sinks.h"
+#include "runner_doiact_undef.h"

@@ -1,6 +1,6 @@
 /*******************************************************************************
  * This file is part of SWIFT.
- * Copyright (c) 2016 Bert Vandenbroucke (bert.vandenbroucke@gmail.com).
+ * Copyright (c) 2024 Mladen Ivkovic (mladen.ivkovic@hotmail.com)
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Lesser General Public License as published
@@ -16,18 +16,17 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  ******************************************************************************/
+#ifndef SWIFT_FVPM_GEOMETRY_STRUCT_H
+#define SWIFT_FVPM_GEOMETRY_STRUCT_H
 
-#ifndef SWIFT_VORONOI_CELL_H
-#define SWIFT_VORONOI_CELL_H
+/* Config parameters. */
+#include <config.h>
 
-#if defined(HYDRO_DIMENSION_1D)
-#include "voronoi1d_cell.h"
-#elif defined(HYDRO_DIMENSION_2D)
-#include "voronoi2d_cell.h"
-#elif defined(HYDRO_DIMENSION_3D)
-#include "voronoi3d_cell.h"
+/* Import the right geometry struct definition */
+#if defined(GIZMO_MFV_SPH) || defined(GIZMO_MFM_SPH) || defined(RT_GEAR)
+#include "./fvpm_geometry/Gizmo/fvpm_geometry_struct.h"
 #else
-#error "You have to select a dimension for the hydro!"
+#include "./fvpm_geometry/None/fvpm_geometry_struct.h"
 #endif
 
-#endif  // SWIFT_VORONOI_CELL_H
+#endif /* SWIFT_FVPM_GEOMETRY_STRUCT_H */
