@@ -108,6 +108,7 @@ int main(int argc, char *argv[]) {
   struct pressure_floor_props pressure_floor_props;
   struct black_holes_props black_holes_properties;
   struct fof_props fof_properties;
+  struct fof_cloud_props fof_cloud_properties;
   struct lightcone_array_props lightcone_array_properties;
   struct part *parts = NULL;
   struct phys_const prog_const;
@@ -1231,6 +1232,11 @@ int main(int argc, char *argv[]) {
       }
     }
 #endif
+
+    if (with_fof_cloud)
+      fof_cloud_init(&fof_cloud_properties, params, &prog_const, &us);
+    else
+      bzero(&fof_cloud_properties, sizeof(struct fof_cloud_props));
 
     /* Initialize power spectra calculation */
     if (with_power) {
