@@ -183,6 +183,7 @@ int main(int argc, char *argv[]) {
 #endif
   int with_stars = 0;
   int with_fof = 0;
+  int with_fof_cloud = 0;
   int with_lightcone = 0;
   int with_star_formation = 0;
   int with_feedback = 0;
@@ -254,6 +255,10 @@ int main(int argc, char *argv[]) {
       OPT_BOOLEAN(
           'u', "fof", &with_fof,
           "Run Friends-of-Friends algorithm to perform black hole seeding.",
+          NULL, 0, 0),
+      OPT_BOOLEAN(
+          0, "fof-cloud", &with_fof_cloud,
+          "Run Friends-of-Friends algorithm to identify clouds on-the-fly.",
           NULL, 0, 0),
 
       OPT_BOOLEAN(0, "lightcone", &with_lightcone,
@@ -591,6 +596,12 @@ int main(int argc, char *argv[]) {
           "Error: Cannot perform FOF search without gravity,"
           " --external-gravity or --self-gravity must be chosen.");
     return 1;
+  }
+
+  if (with_fof_cloud) {
+#ifndef WITH_FOF_CLOUD
+    error("Running with FOF for cloud finding but compiled without it!");
+#endif
   }
 
   if (with_lightcone) {
