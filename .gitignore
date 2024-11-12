@@ -411,3 +411,4 @@ black_formatting_env
 
 # vscode
 *.json
+*.code-workspace
