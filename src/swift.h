@@ -47,6 +47,7 @@
 #include "feedback.h"
 #include "feedback_properties.h"
 #include "fof.h"
+#include "fof_cloud.h"
 #include "forcing.h"
 #include "gravity.h"
 #include "gravity_derivatives.h"

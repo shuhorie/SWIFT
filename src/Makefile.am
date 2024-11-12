@@ -79,6 +79,7 @@ include_HEADERS += adaptive_softening.h adaptive_softening_iact.h adaptive_softe
 include_HEADERS += forcing.h
 include_HEADERS += power_spectrum.h
 include_HEADERS += ghost_stats.h
+include_HEADERS += fof_cloud.h
 
 # source files for EAGLE extra I/O
 EAGLE_EXTRA_IO_SOURCES=
