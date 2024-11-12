@@ -2107,6 +2107,18 @@ if test "$enable_standalone_fof" = "yes"; then
 fi
 AM_CONDITIONAL([HAVESTANDALONEFOF],[test $enable_standalone_fof = "yes"])
 
+# FoF for on-the-fly cloud identification.
+AC_ARG_ENABLE([fof-cloud],
+   [AS_HELP_STRING([--enable-fof-cloud],
+     [Activate the friends-of-friends (FoF) code to identify clouds on-the-fly.],
+   )],
+   [enable_fof_cloud="$enableval"],
+   [enable_fof_cloud="no"]
+)
+if test "$enable_fof_cloud" = "yes"; then
+   AC_DEFINE([WITH_FOF_CLOUD], 1, [Enable FoF Cloud])
+fi
+
 # Gravity scheme.
 AC_ARG_WITH([gravity],
    [AS_HELP_STRING([--with-gravity=<scheme>],
@@ -3224,6 +3236,8 @@ AM_CONDITIONAL([HAVEGEARRT], [test "${with_rt:0:4}" = "GEAR"])
 # Check if using Moving mesh
 AM_CONDITIONAL([HAVE_MOVING_MESH], [test "$enable_moving_mesh" = "yes"])
 
+# Check if using FoF for cloud finding
+AM_CONDITIONAL([HAVE_FOF_CLOUD], [test "$enable_fof_cloud" = "yes"])
 
 
 
@@ -3293,6 +3307,7 @@ AC_MSG_RESULT([
    FoF activated:       : $enable_fof
    Lightcones enabled   : $enable_lightcone
    Moving-mesh enabled  : $enable_moving_mesh
+   FoF Cloud finder     : $enable_fof_cloud
 
    Hydro scheme       : $with_hydro
    Dimensionality     : $with_dimension
