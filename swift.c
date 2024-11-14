@@ -1565,6 +1565,7 @@ int main(int argc, char *argv[]) {
     if (with_sinks) engine_policies |= engine_policy_sinks;
     if (with_rt) engine_policies |= engine_policy_rt;
     if (with_power) engine_policies |= engine_policy_power_spectra;
+    if (with_fof_cloud) engine_policies |= engine_policy_fof_cloud;
 
     /* Initialize the engine with the space and policies. */
     engine_init(&e, &s, params, output_options, N_total[swift_type_gas],
@@ -1578,7 +1579,9 @@ int main(int argc, char *argv[]) {
                 &feedback_properties, &pressure_floor_props, &rt_properties,
                 &mesh, &pow_data, &potential, &forcing_terms, &cooling_func,
                 &starform, &chemistry, &extra_io_props, &fof_properties,
-                &los_properties, &lightcone_array_properties, &ics_metadata);
+                &fof_cloud_properties,
+                &los_properties, &lightcone_array_properties,
+                &ics_metadata);
     engine_config(/*restart=*/0, /*fof=*/0, &e, params, nr_nodes, myrank,
                   nr_threads, nr_pool_threads, with_aff, talking, restart_dir,
                   restart_file, &reparttype);

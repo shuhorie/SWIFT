@@ -136,7 +136,8 @@ const char *engine_policy_names[] = {"none",
                                      "rt",
                                      "power spectra",
                                      "moving mesh",
-                                     "moving mesh hydro"};
+                                     "moving mesh hydro",
+                                     "fof cloud"};
 
 const int engine_default_snapshot_subsample[swift_type_count] = {0};
 
@@ -3251,7 +3252,9 @@ void engine_init(
     const struct star_formation *starform,
     const struct chemistry_global_data *chemistry,
     struct extra_io_properties *io_extra_props,
-    struct fof_props *fof_properties, struct los_props *los_properties,
+    struct fof_props *fof_properties,
+    struct fof_cloud_props *fof_cloud_properties,
+    struct los_props *los_properties,
     struct lightcone_array_props *lightcone_array_properties,
     struct ic_info *ics_metadata) {
 
@@ -3396,6 +3399,7 @@ void engine_init(
   e->chemistry = chemistry;
   e->io_extra_props = io_extra_props;
   e->fof_properties = fof_properties;
+  e->fof_cloud_properties = fof_cloud_properties;
   e->parameter_file = params;
   e->output_options = output_options;
   e->stf_this_timestep = 0;

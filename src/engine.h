@@ -91,8 +91,9 @@ enum engine_policy {
   engine_policy_power_spectra = (1 << 27),
   engine_policy_grid = (1 << 28),
   engine_policy_grid_hydro = (1 << 29),
+  engine_policy_fof_cloud = (1 << 30),
 };
-#define engine_maxpolicy 30
+#define engine_maxpolicy 31
 extern const char *engine_policy_names[engine_maxpolicy + 1];
 
 /**
@@ -570,6 +571,9 @@ struct engine {
   /*! The FOF properties data. */
   struct fof_props *fof_properties;
 
+  /*! The FOF for cloud finder properties data. */
+  struct fof_cloud_props *fof_cloud_properties;
+
   /* The (parsed) parameter file */
   struct swift_params *parameter_file;
 
@@ -728,7 +732,9 @@ void engine_init(
     const struct star_formation *starform,
     const struct chemistry_global_data *chemistry,
     struct extra_io_properties *io_extra_props,
-    struct fof_props *fof_properties, struct los_props *los_properties,
+    struct fof_props *fof_properties,
+    struct fof_cloud_props *fof_cloud_properties,
+    struct los_props *los_properties,
     struct lightcone_array_props *lightcone_array_properties,
     struct ic_info *ics_metadata);
 void engine_config(int restart, int fof, struct engine *e,
