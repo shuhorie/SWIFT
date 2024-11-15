@@ -43,12 +43,12 @@ void fof_cloud_init(struct fof_cloud_props *props,
   /* Main operation modes ------------------------------------------------- */
 
   props->l_x_absolute =
-      parser_get_param_double(params, "FOFCloud:Linking_Length_in_cgs");
-  props->l_x_absolute /= units_cgs_conversion_factor(us, UNIT_CONV_LENGTH);
+      parser_get_param_double(params, "FOFCloud:Linking_Length_in_cgs") /
+      units_cgs_conversion_factor(us, UNIT_CONV_LENGTH);
 
   props->rho_min =
-      parser_get_param_double(params, "FOFCloud:Density_Threshold_in_cgs");
-  props->rho_min /= units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
+      parser_get_param_double(params, "FOFCloud:Density_Threshold_in_cgs") /
+      units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
 
   props->min_group_size =
       parser_get_param_int(params, "FOFCloud:min_group_size");
