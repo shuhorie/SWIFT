@@ -144,6 +144,8 @@ enum {
   timer_do_rt_collect_times,
   timer_do_sync,
   timer_neutrino_weighting,
+  timer_fof_cloud_self,
+  timer_fof_cloud_pair,
   timer_count,
 };
 
