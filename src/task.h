@@ -120,6 +120,8 @@ enum task_types {
   task_type_rt_advance_cell_time,
   task_type_rt_sort,
   task_type_rt_collect_times,
+  task_type_fof_cloud_self,
+  task_type_fof_cloud_pair,
   task_type_count
 } __attribute__((packed));
 
