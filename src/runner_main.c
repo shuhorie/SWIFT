@@ -604,6 +604,12 @@ void *runner_main(void *data) {
         case task_type_rt_advance_cell_time:
           runner_do_rt_advance_cell_time(r, t->ci, 1);
           break;
+        case task_type_fof_cloud_self:
+          runner_do_fof_cloud_search_self(r, t->ci, 1);
+          break;
+        case task_type_fof_cloud_pair:
+          runner_do_fof_cloud_search_pair(r, t->ci, t->cj, 1);
+          break;
         default:
           error("Unknown/invalid task type (%d).", t->type);
       }

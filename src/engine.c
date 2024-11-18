@@ -1525,6 +1525,10 @@ int engine_prepare(struct engine *e) {
     engine_split_gas_particles(e);
   }
 
+  /* Perform FoF search to identify clouds on-the-fly. */
+  if (e->policy & engine_policy_fof_cloud)
+    engine_fof_cloud(e, /*foreign buffers allocated=*/1);
+
   /* Do we need repartitioning ? */
   if (e->forcerepart) {
 

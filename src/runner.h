@@ -171,6 +171,9 @@ void runner_do_rt_advance_cell_time(struct runner *r, struct cell *c,
                                     int timer);
 void runner_do_collect_rt_times(struct runner *r, struct cell *c,
                                 const int timer);
+void runner_do_fof_cloud_search_self(struct runner *r, struct cell *c, int timer);
+void runner_do_fof_cloud_search_pair(struct runner *r, struct cell *ci,
+                               struct cell *cj, int timer);
 void *runner_main(void *data);
 
 ticks runner_get_active_time(const struct runner *restrict r);

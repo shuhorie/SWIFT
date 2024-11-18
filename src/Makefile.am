@@ -161,7 +161,7 @@ endif
 #source files for FoF cloud finding
 FOF_CLOUD_SOURCES =
 if HAVE_FOF_CLOUD
-FOF_CLOUD_SOURCES += fof_cloud/fof_cloud.c
+FOF_CLOUD_SOURCES += fof_cloud/fof_cloud.c fof_cloud/engine_fof_cloud.c
 endif
 
 # Common source files

@@ -4635,6 +4635,119 @@ void engine_make_fof_tasks(struct engine *e) {
 }
 
 /**
+ * @brief Constructs the top-level self + pair tasks for the FOF loop over
+ * neighbours for cloud finding.
+ *
+ * Here we construct all the tasks for all possible neighbouring non-empty
+ * local cells in the hierarchy. No dependencies are being added thus far.
+ * Additional loop over neighbours can later be added by simply duplicating
+ * all the tasks created by this function.
+ *
+ * This fuction is tuned to use cloud finding with FoF, referring to the
+ * function engine_make_fofloop_tasks_mapper.
+ *
+ * @param map_data Offset of first two indices disguised as a pointer.
+ * @param num_elements Number of cells to traverse.
+ * @param extra_data The #engine.
+ */
+void engine_make_fof_cloud_loop_tasks_mapper(void *map_data, int num_elements,
+                                             void *extra_data) {
+
+  /* Extract the engine pointer */
+  struct engine *e = (struct engine *)extra_data;
+
+  struct space *s = e->s;
+  struct scheduler *sched = &e->sched;
+  const int nodeID = e->nodeID;
+  const int *cdim = s->cdim;
+  struct cell *cells = s->cells_top;
+
+  /* Loop through the elements, which are just byte offsets from NULL. */
+  for (int ind = 0; ind < num_elements; ind++) {
+
+    /* Get the cell index. */
+    const int cid = (size_t)(map_data) + ind;
+    const int i = cid / (cdim[1] * cdim[2]);
+    const int j = (cid / cdim[2]) % cdim[1];
+    const int k = cid % cdim[2];
+
+    /* Get the cell */
+    struct cell *ci = &cells[cid];
+
+    /* Skip cells without hydro particles */
+    if (ci->hydro.count == 0) continue;
+
+    /* Skip cells without gravity particles */
+    if (ci->grav.count == 0) continue;
+
+    /* If the cells is local build a self-interaction */
+    if (ci->nodeID == nodeID)
+      scheduler_addtask(sched, task_type_fof_cloud_self, task_subtype_none,
+                        0, 0, ci, NULL);
+
+    /* Now loop over all the neighbours of this cell */
+    for (int ii = -1; ii < 2; ii++) {
+      int iii = i + ii;
+      if (!s->periodic && (iii < 0 || iii >= cdim[0])) continue;
+
+      iii = (iii + cdim[0]) % cdim[0];
+      for (int jj = -1; jj < 2; jj++) {
+        int jjj = j + jj;
+        if (!s->periodic && (jjj < 0 || jjj >= cdim[1])) continue;
+
+        jjj = (jjj + cdim[1]) % cdim[1];
+        for (int kk = -1; kk < 2; kk++) {
+          int kkk = k + kk;
+          if (!s->periodic && (kkk < 0 || kkk >= cdim[2])) continue;
+          kkk = (kkk + cdim[2]) % cdim[2];
+
+          /* Get the neighbour cell */
+          const int cjd = cell_getid(cdim, iii, jjj, kkk);
+          struct cell *cj = &cells[cjd];
+
+          /* Does that neighbour have particles? */
+          if (cid >= cjd || cj->hydro.count == 0 || cj->grav.count == 0)
+            continue;
+
+          /* Construct the pair search task only for fully local pairs */
+          if (ci->nodeID == nodeID && cj->nodeID == nodeID)
+            scheduler_addtask(sched, task_type_fof_cloud_pair, task_subtype_none,
+                              0, 0, ci, cj);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * @brief Fill the #space's task list with FOF cloud tasks.
+ *
+ * @param e The #engine we are working with.
+ */
+void engine_make_fof_cloud_tasks(struct engine *e) {
+
+  struct space *s = e->s;
+  // struct scheduler *sched = &e->sched;
+  ticks tic = getticks();
+
+  threadpool_map(&e->threadpool, engine_make_fof_cloud_loop_tasks_mapper, NULL,
+                 s->nr_cells, 1, threadpool_auto_chunk_size, e);
+
+  if (e->verbose)
+    message("Making FoF cloud tasks took %.3f, %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Split the tasks. */
+  /* ignore this for now. */
+
+  if (e->verbose)
+    message("took %.3f %s.", clocks_from_ticks(getticks() - tic),
+            clocks_getunit());
+}
+
+/**
  * @brief Fill the #space's task list.
  *
  * @param e The #engine we are working with.
@@ -4777,6 +4890,16 @@ void engine_maketasks(struct engine *e) {
             clocks_from_ticks(getticks() - tic2), clocks_getunit());
 
   tic2 = getticks();
+
+  // /* Add the tasks for cloud finding with FoF */
+  // if (e->policy & engine_policy_fof_cloud)
+  //   engine_make_fof_cloud_tasks(e);
+
+  // if (e->verbose)
+  //   message("Making FoF cloud tasks took %.3f %s.",
+  //           clocks_from_ticks(getticks() - tic2), clocks_getunit());
+
+  // tic2 = getticks();
 
 #ifdef WITH_MPI
   /* Add the communication tasks if MPI is being used. */

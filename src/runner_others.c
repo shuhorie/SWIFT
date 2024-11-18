@@ -1215,3 +1215,45 @@ void runner_do_rt_tchem(struct runner *r, struct cell *c, int timer) {
 
   if (timer) TIMER_TOC(timer_do_rt_tchem);
 }
+
+/**
+ * @brief Recursively search for FOF groups of hydro particles in a
+ * single cell.
+ *
+ * @param r runner task
+ * @param c cell
+ * @param timer 1 if the time is to be recorded.
+ */
+void runner_do_fof_cloud_search_self(struct runner *r, struct cell *c, int timer) {
+
+#ifdef WITH_FOF_CLOUD
+
+  // do something
+  printf("This is from runner_do_fof_cloud_search_self!!!\n");
+
+#else
+  error("SWIFT was not compiled with FOF_CLOUD enabled!");
+#endif
+}
+
+/**
+ * @brief Recursively search for FOF groups of hydro particles between
+ * a pair of cells.
+ *
+ * @param r runner task
+ * @param ci cell i
+ * @param cj cell j
+ * @param timer 1 if the time is to be recorded.
+ */
+void runner_do_fof_cloud_search_pair(struct runner *r, struct cell *ci,
+                               struct cell *cj, int timer) {
+
+#ifdef WITH_FOF_CLOUD
+
+  // do something
+  printf("This is from runner_do_fof_cloud_search_pair!!!\n");
+
+#else
+  error("SWIFT was not compiled with FOF_CLOUD enabled!");
+#endif
+}
