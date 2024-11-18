@@ -81,7 +81,7 @@ void engine_fof_cloud(struct engine *e,
   /* Print the number of active tasks? */
   if (e->verbose) engine_print_task_counts(e);
 
-  /* Perfome local FOF_CLOUD tasks */
+  /* Perform local FOF_CLOUD tasks */
   engine_launch(e, "fof_cloud");
 
   /* Compute group size (only of local fragments with MPI) */
