@@ -993,6 +993,23 @@ __attribute__((always_inline)) INLINE static int cell_can_split_self_fof_task(
 }
 
 /**
+ * @brief Can a self FOF cloud task associated with a cell be split into smaller
+ * sub-tasks.
+ *
+ * This is exactly the same as cell_can_split_self_fof_task() above. This may be
+ * modified for better scaling in the future.
+ *
+ * @param c The #cell.
+ */
+__attribute__((always_inline)) INLINE static int cell_can_split_self_fof_cloud_task(
+    const struct cell *c) {
+
+  /* Is the cell split ? */
+  return c->split && c->grav.count > 5000 &&
+         ((c->maxdepth - c->depth) > space_subdepth_diff_grav);
+}
+
+/**
  * @brief Have gas particles in a pair of cells moved too much and require a
  * rebuild
  * ?

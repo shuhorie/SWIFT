@@ -4727,7 +4727,7 @@ void engine_make_fof_cloud_loop_tasks_mapper(void *map_data, int num_elements,
 void engine_make_fof_cloud_tasks(struct engine *e) {
 
   struct space *s = e->s;
-  // struct scheduler *sched = &e->sched;
+  struct scheduler *sched = &e->sched;
   ticks tic = getticks();
 
   threadpool_map(&e->threadpool, engine_make_fof_cloud_loop_tasks_mapper, NULL,
@@ -4740,7 +4740,23 @@ void engine_make_fof_cloud_tasks(struct engine *e) {
   tic = getticks();
 
   /* Split the tasks. */
-  /* ignore this for now. */
+  scheduler_splittasks_fof_cloud(sched, e->verbose);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  /* Verify that we are not left with invalid tasks */
+  for (int i = 0; i < e->sched.nr_tasks; ++i) {
+    const struct task *t = &e->sched.tasks[i];
+    if (t->ci == NULL && t->cj != NULL && !t->skip) error("Invalid task");
+  }
+#endif
+
+  /* Report the number of tasks we actually used */
+  if (e->verbose)
+    message(
+        "Nr. of tasks: %d allocated tasks: %d ratio: %f memory use: %zd MB.",
+        e->sched.nr_tasks, e->sched.size,
+        (float)e->sched.nr_tasks / (float)e->sched.size,
+        e->sched.size * sizeof(struct task) / (1024 * 1024));
 
   if (e->verbose)
     message("took %.3f %s.", clocks_from_ticks(getticks() - tic),
