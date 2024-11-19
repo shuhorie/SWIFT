@@ -701,6 +701,7 @@ void engine_drift_all(struct engine *e, const int drift_mpoles);
 void engine_drift_top_multipoles(struct engine *e);
 void engine_reconstruct_multipoles(struct engine *e);
 void engine_allocate_foreign_particles(struct engine *e, const int fof);
+void engine_allocate_foreign_particles_fof_cloud(struct engine *e);
 void engine_print_stats(struct engine *e);
 void engine_io(struct engine *e);
 void engine_io_check_snapshot_triggers(struct engine *e);

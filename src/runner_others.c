@@ -1229,7 +1229,7 @@ void runner_do_fof_cloud_search_self(struct runner *r, struct cell *c, int timer
 #ifdef WITH_FOF_CLOUD
 
   // do something
-  printf("This is from runner_do_fof_cloud_search_self!!!\n");
+  // printf("This is from runner_do_fof_cloud_search_self!!!\n");
 
 #else
   error("SWIFT was not compiled with FOF_CLOUD enabled!");
@@ -1251,7 +1251,7 @@ void runner_do_fof_cloud_search_pair(struct runner *r, struct cell *ci,
 #ifdef WITH_FOF_CLOUD
 
   // do something
-  printf("This is from runner_do_fof_cloud_search_pair!!!\n");
+  // printf("This is from runner_do_fof_cloud_search_pair!!!\n");
 
 #else
   error("SWIFT was not compiled with FOF_CLOUD enabled!");

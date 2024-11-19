@@ -959,6 +959,25 @@ void engine_allocate_foreign_particles(struct engine *e, const int fof) {
 #endif
 }
 
+/**
+ * @brief Allocate memory for the foreign particles specialised
+ * in FoF cloud.
+ *
+ * We look into the proxies for cells that have tasks and count
+ * the number of particles in these cells. We then allocate
+ * memory and link all the cells that have tasks and all cells
+ * deeper in the tree.
+ *
+ * @param e The #engine.
+ */
+void engine_allocate_foreign_particles_fof_cloud(struct engine *e) {
+
+#ifdef WITH_MPI
+
+#else
+  error("SWIFT was not compiled with MPI support.");
+#endif /* WITH_MPI*/
+}
 void engine_do_tasks_count_mapper(void *map_data, int num_elements,
                                   void *extra_data) {
 

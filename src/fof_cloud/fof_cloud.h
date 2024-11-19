@@ -111,6 +111,15 @@ void fof_cloud_init(struct fof_cloud_props *fcp,
                     struct swift_params *params,
                     const struct phys_const *phys_const,
                     const struct unit_system *us);
-
+void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
+                                    const struct space *s);
+void fof_cloud_compute_local_sizes(struct fof_cloud_props *props,
+                                   struct space *s);
+void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
+                                      const struct space *s);
+void fof_cloud_compute_group_props(struct fof_cloud_props *props,
+                                   const struct phys_const *constants,
+                                   const struct cosmology *cosmo,
+                                   struct space *s);
 
 #endif /* SWIFT_FOF_CLOUD_H */

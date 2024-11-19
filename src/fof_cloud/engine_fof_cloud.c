@@ -85,23 +85,28 @@ void engine_fof_cloud(struct engine *e,
   engine_launch(e, "fof_cloud");
 
   /* Compute group size (only of local fragments with MPI) */
-  // develop a function here
+  fof_cloud_compute_local_sizes(e->fof_cloud_properties, e->s);
 
 #ifdef WITH_MPI
 
-  // MPI task here
-#endif
+  /* Allocate buffers to receive the part for fof information */
+  engine_allocate_foreign_particles_fof_cloud(e);
 
+  /* Compute the local<->foreign group links (nothing to do without MPI)*/
+  fof_cloud_search_foreign_cells(e->fof_cloud_properties, e->s);
 
-#ifdef WITH_MPI
+  /* Free the foreign particles */
+  space_free_foreign_parts(e->s, /*clear pointers=*/1);
 
   /* Link the foreign fragments and finalise global group list (nothing to do
    * without MPI) */
-//   fof_link_foreign_fragments(e->fof_properties, e->s);
+  fof_cloud_link_foreign_fragments(e->fof_cloud_properties, e->s);
 #endif
 
   /* Compute group properties and act on the results */
-//   fof_cloud_compute_group_props()
+  fof_cloud_compute_group_props(e->fof_cloud_properties,
+                                e->physical_constants, e->cosmology,
+                                e->s);
 
   /* Restore the foreign buffers as they were*/
   if (foreign_buffers_allocated) {

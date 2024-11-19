@@ -63,8 +63,69 @@ void fof_cloud_init(struct fof_cloud_props *props,
 
 }
 
+/**
+ * @brief Search foreign cells for links and communicate any found to the
+ * appropriate node.
+ *
+ * @param props the properties of the FOF cloud scheme.
+ * @param s Pointer to a #space.
+ */
+void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
+                                    const struct space *s) {
 
+#ifdef WITH_MPI
+  printf("fof_cloud_search_foreign_cells\n");
+#endif /* WITH_MPI */
+}
 
+/**
+ * @brief Compute the local size of each FOF cloud group fragment.
+ *
+ * @param props The properties of the FOF cloud scheme.
+ * @param s The #space containing the particles.
+ */
+void fof_cloud_compute_local_sizes(struct fof_cloud_props *props,
+                                   struct space *s) {
 
+//   const int verbose = s->e->verbose;
+
+  printf("fof_cloud_compute_local_sizes\n");
+}
+
+/**
+ * @brief Process all the group fragments spanning more than
+ * one rank to link them.
+ *
+ * This is the final global union-find pass which concludes
+ * the MPI-FOF-algorithm.
+ *
+ * @param props The properties fof the FOF cloud scheme.
+ * @param s The #space we work with.
+ */
+void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
+                                      const struct space *s) {
+
+#ifdef WITH_MPI
+  printf("fof_cloud_link_foreign_fragments\n");
+
+#endif /* WITH_MPI */
+}
+
+/**
+ * @brief Compute all the group properties
+ *
+ * @param props The properties of the FOF cloud scheme.
+ * @param constants The physical constants in internal units.
+ * @param cosmo The current cosmological model.
+ * @param s The #space containing the particles.
+ */
+void fof_cloud_compute_group_props(struct fof_cloud_props *props,
+                                   const struct phys_const *constants,
+                                   const struct cosmology *cosmo,
+                                   struct space *s) {
+
+//   const int verbose = s->e->verbose;
+  printf("fof_cloud_group_props\n");
+}
 
 #endif /* WITH_FOF_CLOUD */
