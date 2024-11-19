@@ -1193,6 +1193,9 @@ int engine_estimate_nr_tasks(const struct engine *e) {
 #endif
 #endif
   }
+  if (e->policy & engine_policy_fof_cloud) {
+    n1 += 2;
+  }
 
 #ifdef WITH_MPI
 
