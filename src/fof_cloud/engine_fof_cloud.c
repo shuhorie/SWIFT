@@ -69,8 +69,7 @@ void engine_fof_cloud(struct engine *e,
   }
 
   /* Initialise FoF parameters and allocate FoF arrays */
-  /* Not need to do this? */
-//   fof_allocate(e->s, e->fof_cloud_properties);
+  fof_cloud_allocate(e->s, e->fof_cloud_properties);
 
   /* Make FoF cloud tasks */
   engine_make_fof_cloud_tasks(e);

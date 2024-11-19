@@ -48,6 +48,7 @@
 #include "error.h"
 #include "feedback.h"
 #include "fof.h"
+#include "fof_cloud.h"
 #include "forcing.h"
 #include "gravity.h"
 #include "hydro.h"
@@ -1228,8 +1229,19 @@ void runner_do_fof_cloud_search_self(struct runner *r, struct cell *c, int timer
 
 #ifdef WITH_FOF_CLOUD
 
-  // do something
-  // printf("This is from runner_do_fof_cloud_search_self!!!\n");
+  TIMER_TIC;
+
+  const struct engine *e = r->e;
+  struct space *s = e->s;
+  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
+  const int periodic = s->periodic;
+  const struct part *const parts = s->parts;
+  const double search_r2 = e->fof_cloud_properties->l_x2;
+
+  rec_fof_cloud_search_self(e->fof_cloud_properties, dim, search_r2, periodic,
+                            parts, c);
+
+  if (timer) TIMER_TOC(timer_fof_cloud_self);
 
 #else
   error("SWIFT was not compiled with FOF_CLOUD enabled!");
