@@ -4689,18 +4689,15 @@ void engine_make_fof_cloud_loop_tasks_mapper(void *map_data, int num_elements,
     for (int ii = -1; ii < 2; ii++) {
       int iii = i + ii;
       if (!s->periodic && (iii < 0 || iii >= cdim[0])) continue;
-
       iii = (iii + cdim[0]) % cdim[0];
       for (int jj = -1; jj < 2; jj++) {
         int jjj = j + jj;
         if (!s->periodic && (jjj < 0 || jjj >= cdim[1])) continue;
-
         jjj = (jjj + cdim[1]) % cdim[1];
         for (int kk = -1; kk < 2; kk++) {
           int kkk = k + kk;
           if (!s->periodic && (kkk < 0 || kkk >= cdim[2])) continue;
           kkk = (kkk + cdim[2]) % cdim[2];
-
           /* Get the neighbour cell */
           const int cjd = cell_getid(cdim, iii, jjj, kkk);
           struct cell *cj = &cells[cjd];
@@ -4741,6 +4738,10 @@ void engine_make_fof_cloud_tasks(struct engine *e) {
 
   /* Split the tasks. */
   scheduler_splittasks_fof_cloud(sched, e->verbose);
+
+  if (e->verbose)
+    message("Splitting FOF cloud tasks took %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
 
 #ifdef SWIFT_DEBUG_CHECKS
   /* Verify that we are not left with invalid tasks */

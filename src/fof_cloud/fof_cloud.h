@@ -44,9 +44,6 @@ struct fof_cloud_props {
   /*! The types of particles to use for linking */
   int fof_linking_types[swift_type_count];
 
-  /*! The types of particles to use for attaching */
-  int fof_attach_types[swift_type_count];
-
   /* ------------  Group properties ----------------- */
 
   /*! Number of groups */
@@ -58,12 +55,6 @@ struct fof_cloud_props {
 
   /*! Index of the root particle of the group a given gpart belongs to. */
   size_t *group_index;
-
-  /*! Index of the root particle of the group a given gpart is attached to. */
-  size_t *attach_index;
-
-  /*! Has the particle found a linkable to attach to? */
-  char *found_attachable_link;
 
   /*! Is the group purely local after linking the foreign particles? */
   char *is_purely_local;
