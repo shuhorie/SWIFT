@@ -18,7 +18,7 @@
 /**
  * @brief Activate all the FoF linking tasks for cloud finding.
  *
- * Marks all the other task types to be skipped.
+ * All the other task types are never skipped.
  *
  * @param e The #engine to act on.
  */
@@ -31,13 +31,14 @@ void engine_activate_fof_cloud_tasks(struct engine *e) {
   struct task *tasks = s->tasks;
 
   for (int k = 0; k < nr_tasks; k++) {
+
     struct task *t =&tasks[k];
 
     if (t->type == task_type_fof_cloud_self ||
         t->type == task_type_fof_cloud_pair)
       scheduler_activate(s, t);
-    else
-      t->skip = 1;
+    // else
+    //   t->skip = 1;
   }
 
   if (e->verbose)
@@ -61,14 +62,14 @@ void engine_fof_cloud(struct engine *e,
 
   const ticks tic = getticks();
 
-  /* Start by cleaning up the foreign buffers */
-  if (foreign_buffers_allocated) {
-#ifdef WITH_MPI
-    space_free_foreign_parts(e->s, /*clear pointers=*/1);
-#endif
-  }
+//   /* Start by cleaning up the foreign buffers */
+//   if (foreign_buffers_allocated) {
+// #ifdef WITH_MPI
+//     space_free_foreign_parts(e->s, /*clear pointers=*/1);
+// #endif
+//   }
 
-  /* Initialise FoF parameters and allocate FoF arrays */
+  /* Initialise FoF cloud parameters and allocate FoF cloud arrays */
   fof_cloud_allocate(e->s, e->fof_cloud_properties);
 
   /* Make FoF cloud tasks */
@@ -107,7 +108,7 @@ void engine_fof_cloud(struct engine *e,
                                 e->physical_constants, e->cosmology,
                                 e->s);
 
-  /* Restore the foreign buffers as they were*/
+  /* Restore the foreign buffers as they were */
   if (foreign_buffers_allocated) {
 #ifdef WITH_MPI
     engine_allocate_foreign_particles(e, /*fof=*/0);
