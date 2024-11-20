@@ -49,6 +49,8 @@ void fof_cloud_init(struct fof_cloud_props *props,
       parser_get_param_double(params, "FOFCloud:Linking_Length_in_cgs") /
       units_cgs_conversion_factor(us, UNIT_CONV_LENGTH);
 
+  props->l_x2 = props->l_x_absolute * props->l_x_absolute;
+
   props->rho_min =
       parser_get_param_double(params, "FOFCloud:Density_Threshold_in_cgs") /
       units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
@@ -67,6 +69,67 @@ void fof_cloud_init(struct fof_cloud_props *props,
 }
 
 /**
+ * @brief Mapper function to set the initial group indices.
+ *
+ * This is exactly the same as fof_set_initial_group_index_mapper()
+ * in fof.c.
+ *
+ * @param map_data The array of group indices.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to first group index.
+ */
+void fof_cloud_set_initial_group_index_mapper(void *map_data, int num_elements,
+                                              void *extra_data) {
+  size_t *group_index = (size_t *)map_data;
+  size_t *group_index_start = (size_t *)extra_data;
+
+  const ptrdiff_t offset = group_index - group_index_start;
+
+  for (int i = 0; i < num_elements; ++i) {
+    group_index[i] = i + offset;
+  }
+}
+
+/**
+ * @brief Mapper function to set the initial distances.
+ *
+ * This is exactly the same as fof_set_initial_part_distances_mapper()
+ * in fof.c.
+ *
+ * @param map_data The array of distance.
+ * @param num_elements Chunk size.
+ * @param extra_data N/A.
+ */
+void fof_cloud_set_initial_part_distances_mapper(void *map_data,
+                                                 int num_elements,
+                                                 void *extra_data) {
+
+  float *distance = (float *)map_data;
+  for (int i = 0; i < num_elements; ++i) {
+    distance[i] = FLT_MAX;
+  }
+}
+
+/**
+ * @brief Mapper function to set the initial group sizes.
+ *
+ * This is exactly the same as fof_set_initial_group_size_mapper()
+ * in fof.c.
+ *
+ * @param map_data The array of group sizes.
+ * @param num_elements Chunk size.
+ * @param extra_data N/A.
+ */
+void fof_cloud_set_initial_group_size_mapper(void *map_data, int num_elements,
+                                             void *extra_data) {
+
+  size_t *group_size = (size_t *)map_data;
+  for (int i = 0; i < num_elements; ++i) {
+    group_size[i] = 1;
+  }
+}
+
+/**
  * @brief Allocate the memory and initialise the arrays for a FOF cloud calculation.
  *
  * @param s The #space to act on.
@@ -74,6 +137,73 @@ void fof_cloud_init(struct fof_cloud_props *props,
  */
 void fof_cloud_allocate(const struct space *s, struct fof_cloud_props *props) {
 
+  const int verbose = s->e->verbose;
+  const ticks total_tic = getticks();
+
+#ifdef WITH_MPI
+  /* Check size of linking length against the top-level cell dimensions. */
+  if (props->l_x2 > s->width[0] * s->width[0])
+    error(
+        "Linking length for FoF cloud is greater than the width of a top-level"
+        "cell. Need to check more than one layer of top-level cells for links.");
+#endif
+
+  /* Allocate and initialise a group index array. */
+  if (swift_memalign("fof_group_index", (void **)&props->group_index, 64,
+                     s->nr_gparts * sizeof(size_t)) != 0)
+    error("Failed to allocate list of particle group indices for FoF cloud search.");
+
+  /* Allocate and initialise the closest distance array. */
+  if (swift_memalign("fof_distance", (void **)&props->distance_to_link, 64,
+                     s->nr_gparts * sizeof(float)) != 0)
+    error(
+        "Failed to allocate list of particle distances array for FoF cloud search.");
+
+  /* Allocate and initialise a group size array. */
+  if (swift_memalign("fof_group_size", (void **)&props->group_size, 64,
+                     s->nr_gparts * sizeof(size_t)) != 0)
+    error("Failed to allocate list of group size for FoF cloud search.");
+
+  ticks tic = getticks();
+
+  /* Set initial group index */
+  threadpool_map(&s->e->threadpool, fof_cloud_set_initial_group_index_mapper,
+                 props->group_index, s->nr_parts, sizeof(size_t),
+                 threadpool_auto_chunk_size, props->group_index);
+
+  if (verbose)
+    message("Setting initial group index took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Set initial distances */
+  threadpool_map(&s->e->threadpool, fof_cloud_set_initial_part_distances_mapper,
+                 props->distance_to_link, s->nr_parts, sizeof(float),
+                 threadpool_auto_chunk_size, NULL);
+
+  if (verbose)
+    message("Setting initial distances took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Set initial group sizes */
+  threadpool_map(&s->e->threadpool, fof_cloud_set_initial_group_size_mapper,
+                 props->group_size, s->nr_parts, sizeof(size_t),
+                 threadpool_auto_chunk_size, NULL);
+
+  if (verbose)
+    message("Setting initial group sizes took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+#ifdef SWIFT_DEBUG_CHECKS
+  ti_current = s->e->ti_current;
+#endif
+
+  if (verbose)
+    message("took %.3f %s.", clocks_from_ticks(getticks() - total_tic),
+            clocks_getunit());
 }
 
 /**
@@ -413,6 +543,10 @@ void fof_cloud_compute_group_props(struct fof_cloud_props *props,
 
 //   const int verbose = s->e->verbose;
   printf("fof_cloud_group_props\n");
+
+  swift_free("fof_group_index", props->group_index);
+  swift_free("fof_distance", props->distance_to_link);
+  swift_free("fof_group_size", props->group_size);
 }
 
 #endif /* WITH_FOF_CLOUD */
