@@ -26,9 +26,14 @@
 /* Local includes. */
 #include "inline.h"
 #include "timers.h"
+#include "hashmap.h"
 
 /* Constants. */
 #define FOF_CLOUD_COMPRESS_PATHS_MIN_LENGTH (2)
+
+/*! Offset between the first particle on this MPI rank and the first particle in
+ * the global order */
+size_t node_offset_cloud;
 
 /**
  * @brief Initialise the properties of the FOF code for cloud finding.
@@ -741,6 +746,68 @@ void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
 #endif /* WITH_MPI */
 }
 
+/* Mapper function to atomically update the group size array.
+ *
+ * This is exactly the same as fof_update_group_size_mapper() in fof.c.
+ */
+void fof_cloud_update_group_size_mapper(hashmap_key_t key, hashmap_value_t *value,
+                                        void *data) {
+
+  size_t *group_size = (size_t *)data;
+
+  /* Use key to index into group size array. */
+  atomic_add(&group_size[key], value->value_st);
+}
+
+/**
+ * @brief Mapper function to calculate the group sizes of clouds.
+ *
+ * @param map_data An array of #part%s.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to a #space.
+ */
+void fof_calc_cloud_group_size_mapper(void *map_data, int num_elements,
+                                      void *extra_data) {
+
+  /* Retrieve mapped data. */
+  struct space *s = (struct space *)extra_data;
+  struct part *parts = (struct part *)map_data;
+  size_t *restrict group_index = s->e->fof_cloud_properties->group_index;
+  size_t *restrict group_size = s->e->fof_cloud_properties->group_size;
+
+  /* Offset into gparts array. */
+  const ptrdiff_t parts_offset = (ptrdiff_t)(parts - s->parts);
+  size_t *const group_index_offset = group_index + parts_offset;
+
+  /* Create hash table. */
+  hashmap_t map;
+  hashmap_init(&map);
+
+  for (int ind = 0; ind < num_elements; ind++) {
+
+    const hashmap_key_t root =
+        (hashmap_key_t)fof_cloud_find(group_index_offset[ind], group_index);
+    const size_t part_index = parts_offset + ind;
+
+    /* Only add particles which aren't the root of a group. Stops groups of size
+     * 1 being added to the hash table. */
+    if (root != part_index) {
+      hashmap_value_t *size = hashmap_get(&map, root);
+
+      if (size != NULL)
+        (*size).value_st++;
+      else
+        error("Couldn't find key (%zu) or create new one.", root);
+    }
+  }
+
+  /* Update the group size array. */
+  if (map.size > 0)
+    hashmap_iterate(&map, fof_cloud_update_group_size_mapper, group_size);
+
+  hashmap_free(&map);
+}
+
 /**
  * @brief Compute the local size of each FOF cloud group fragment.
  *
@@ -750,9 +817,49 @@ void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
 void fof_cloud_compute_local_sizes(struct fof_cloud_props *props,
                                    struct space *s) {
 
-//   const int verbose = s->e->verbose;
+  const int verbose = s->e->verbose;
 
-  printf("fof_cloud_compute_local_sizes\n");
+  struct part *parts = s->parts;
+  const size_t nr_parts = s->nr_parts;
+
+  const ticks tic_total = getticks();
+
+  if (engine_rank == 0 && verbose)
+    message("Size of hash table element: %ld", sizeof(hashmap_element_t));
+
+#ifdef WITH_MPI
+
+  const ticks comms_tic = getticks();
+
+  /* Determine number of parts on lower numbwer MPI ranks */
+  const long long nr_parts_local = s->nr_parts;
+  long long nr_parts_cumulative;
+  MPI_Scan(&nr_parts_local, &nr_parts_cumulative, 1, MPI_LONG_LONG, MPI_SUM,
+           MPI_COMM_WORLD);
+
+  if (verbose)
+    message("MPI_Scan Imbalance took: %.3f %s.",
+            clocks_from_ticks(getticks() - comms_tic), clocks_getunit());
+
+  /* Reset global variable containing the rank particle count offset */
+  node_offset_cloud = nr_parts_cumulative - nr_parts_local;
+#endif /* WITH_MPI */
+
+  /* Compute the group sizes of the local fragments
+   * (in non-MPI land that is the final group size of the clouds) */
+  const ticks tic_calc_group_size = getticks();
+
+  threadpool_map(&s->e->threadpool, fof_calc_cloud_group_size_mapper, parts,
+                 nr_parts, sizeof(struct part), threadpool_auto_chunk_size,
+                 s);
+  if (verbose)
+    message("FOF cloud calc group size took (FOF_CLOUD SCALING): %.3f %s.",
+            clocks_from_ticks(getticks() - tic_calc_group_size),
+            clocks_getunit());
+
+  if (verbose)
+    message("took %.3f %s.", clocks_from_ticks(getticks() - tic_total),
+            clocks_getunit());
 }
 
 /**
