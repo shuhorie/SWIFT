@@ -1258,12 +1258,27 @@ void runner_do_fof_cloud_search_self(struct runner *r, struct cell *c, int timer
  * @param timer 1 if the time is to be recorded.
  */
 void runner_do_fof_cloud_search_pair(struct runner *r, struct cell *ci,
-                               struct cell *cj, int timer) {
+                                     struct cell *cj, int timer) {
 
 #ifdef WITH_FOF_CLOUD
 
-  // do something
-  // printf("This is from runner_do_fof_cloud_search_pair!!!\n");
+  TIMER_TIC;
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (ci->nodeID != cj->nodeID) error("Searching foreign cells!");
+#endif
+
+  const struct engine *e = r->e;
+  struct space *s = e->s;
+  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
+  const int periodic = s->periodic;
+  const struct part *const parts = s->parts;
+  const double search_r2 = e->fof_cloud_properties->l_x2;
+
+  rec_fof_cloud_search_pair(e->fof_cloud_properties, dim, search_r2, periodic,
+                            parts, ci, cj);
+
+  if (timer) TIMER_TOC(timer_fof_cloud_pair);
 
 #else
   error("SWIFT was not compiled with FOF_CLOUD enabled!");

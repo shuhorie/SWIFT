@@ -316,6 +316,96 @@ __attribute__((always_inline)) INLINE static void fof_cloud_union(
 }
 
 /**
+ * @brief Compute th minimal distance between any two points in two cells.
+ *
+ * This is exactly the same as cell_min_dist() in fof.c
+ *
+ * @param ci The first #cell.
+ * @param cj The second #cell.
+ * @param dim The size of the simulation domain.
+ */
+__attribute__((always_inline)) INLINE static double cell_min_dist_fof_cloud(
+    const struct cell *restrict ci, const struct cell *restrict cj,
+    const double dim[3]) {
+
+  /* Get cell locations. */
+  const double cix_min = ci->loc[0];
+  const double ciy_min = ci->loc[1];
+  const double ciz_min = ci->loc[2];
+  const double cjx_min = cj->loc[0];
+  const double cjy_min = cj->loc[1];
+  const double cjz_min = cj->loc[2];
+
+  const double cix_max = ci->loc[0] + ci->width[0];
+  const double ciy_max = ci->loc[1] + ci->width[1];
+  const double ciz_max = ci->loc[2] + ci->width[2];
+  const double cjx_max = cj->loc[0] + cj->width[0];
+  const double cjy_max = cj->loc[1] + cj->width[1];
+  const double cjz_max = cj->loc[2] + cj->width[2];
+
+  double not_same_range[3];
+
+  /* If two cells are in the same range of coordinates along
+     any of the 3 axis, the distance along this axis is 0 */
+  if (ci->width[0] > cj->width[0]) {
+    if ((cix_min <= cjx_min) && (cjx_max <= cix_max))
+      not_same_range[0] = 0.;
+    else
+      not_same_range[0] = 1.;
+  } else {
+    if ((cjx_min <= cix_min) && (cix_max <= cjx_max))
+      not_same_range[0] = 0.;
+    else
+      not_same_range[0] = 1.;
+  }
+  if (ci->width[1] > cj->width[1]) {
+    if ((ciy_min <= cjy_min) && (cjy_max <= ciy_max))
+      not_same_range[1] = 0.;
+    else
+      not_same_range[1] = 1.;
+  } else {
+    if ((cjy_min <= ciy_min) && (ciy_max <= cjy_max))
+      not_same_range[1] = 0.;
+    else
+      not_same_range[1] = 1.;
+  }
+  if (ci->width[2] > cj->width[2]) {
+    if ((ciz_min <= cjz_min) && (cjz_max <= ciz_max))
+      not_same_range[2] = 0.;
+    else
+      not_same_range[2] = 1.;
+  } else {
+    if ((cjz_min <= ciz_min) && (ciz_max <= cjz_max))
+      not_same_range[2] = 0.;
+    else
+      not_same_range[2] = 1.;
+  }
+
+  /* Find the shortest distance between cells, remembering to account for
+   * periodic boundary conditions. */
+  double dx[3];
+  dx[0] = min4(fabs(nearest(cix_min - cjx_min, dim[0])),
+               fabs(nearest(cix_min - cjx_max, dim[0])),
+               fabs(nearest(cix_max - cjx_min, dim[0])),
+               fabs(nearest(cix_max - cjx_max, dim[0])));
+
+  dx[1] = min4(fabs(nearest(ciy_min - cjy_min, dim[1])),
+               fabs(nearest(ciy_min - cjy_max, dim[1])),
+               fabs(nearest(ciy_max - cjy_min, dim[1])),
+               fabs(nearest(ciy_max - cjy_max, dim[1])));
+
+  dx[2] = min4(fabs(nearest(ciz_min - cjz_min, dim[2])),
+               fabs(nearest(ciz_min - cjz_max, dim[2])),
+               fabs(nearest(ciz_max - cjz_min, dim[2])),
+               fabs(nearest(ciz_max - cjz_max, dim[2])));
+
+  double r2 = 0.;
+  for (int k = 0; k < 3; k++) r2 += dx[k] * dx[k] * not_same_range[k];
+
+  return r2;
+}
+
+/**
  * @brief Perform a FOF cloud search using union-find on a given leaf-cell
  *
  * @param props The properties fof the FOF cloud scheme.
@@ -329,10 +419,10 @@ void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
                                 const struct cell *c) {
 
 #ifdef SWIFT_DEBUG_CHECKS
-  if (c->split) error("Performing the FOF search at a non-leaf level!");
+  if (c->split) error("Performing the FOF cloud search at a non-leaf level!");
 #endif
 
-  const size_t count = c->grav.count;
+  const size_t count = c->hydro.count;
   const struct part *parts = c->hydro.parts;
 
   /* Index of particles in the global group list */
@@ -361,10 +451,10 @@ void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
     /* Check density threshold */
     if (pi->rho < props->rho_min) continue;
 
-#ifdef SWIFT_DEBUG_CHECKS
-    if (pi->ti_drift != ti_current)
-      error("Running FOF on an un-drifted particle!");
-#endif
+// #ifdef SWIFT_DEBUG_CHECKS
+//     if (pi->ti_drift != ti_current)
+//       error("Running FOF on an un-drifted particle!");
+// #endif
 
     const double pix = pi->x[0];
     const double piy = pi->x[1];
@@ -383,10 +473,10 @@ void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
       /* Check density threshold */
       if (pj->rho < props->rho_min) continue;
 
-#ifdef SWIFT_DEBUG_CHECKS
-      if (pj->ti_drift != ti_current)
-        error("Running FOF on an un-drifted particle!");
-#endif
+// #ifdef SWIFT_DEBUG_CHECKS
+//       if (pj->ti_drift != ti_current)
+//         error("Running FOF on an un-drifted particle!");
+// #endif
 
       /* Find the root of pj. */
       const size_t root_j = fof_cloud_find(offset[j], group_index);
@@ -409,13 +499,132 @@ void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
       /* Hit or miss? */
       if (r2 < l_x2) {
 
-        /* Merge the groups` */
+        /* Merge the groups */
         fof_cloud_union(&root_i, root_j, group_index);
       }
     }
   }
 }
 
+/**
+ * @brief Perform a FOF cloud search using union-find between two cells
+ *
+ * @param props The properties fof the FOF cloud scheme.
+ * @param dim The dimension of the simulation volume.
+ * @param l_x2 The square of the FOF cloud linking length.
+ * @param periodic Are we using periodic BCs?
+ * @param space_parts The start of the #part array in the #space structure.
+ * @param ci The first #cell in which to perform FOF cloud.
+ * @param cj The second #cell in which to perform FOF cloud.
+ */
+void fof_cloud_search_pair_cells(const struct fof_cloud_props *props,
+                                 const double dim[3], const double l_x2,
+                                 const int periodic,
+                                 const struct part *const space_parts,
+                                 const struct cell *restrict ci,
+                                 const struct cell *restrict cj) {
+
+  const size_t count_i = ci->hydro.count;
+  const size_t count_j = cj->hydro.count;
+  const struct part *parts_i = ci->hydro.parts;
+  const struct part *parts_j = cj->hydro.parts;
+
+  /* Index of particles in the global group list */
+  size_t *const group_index = props->group_index;
+
+  /* Make a list of particle offsets into the global parts array. */
+  size_t *const offset_i = group_index + (ptrdiff_t)(parts_i - space_parts);
+  size_t *const offset_j = group_index + (ptrdiff_t)(parts_j - space_parts);
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (offset_j > offset_i && (offset_j < offset_i + count_i))
+    error("Overlapping cells");
+  if (offset_i > offset_j && (offset_i < offset_j + count_j))
+    error("Overlapping cells");
+  if (ci->nodeID != cj->nodeID) error("Searching foreign cells!");
+#endif
+
+  /* Account for boundary conditions.*/
+  double shift[3] = {0.0, 0.0, 0.0};
+
+  /* Get the relative distance between the pairs, wrapping. */
+  double diff[3];
+  for (int k = 0; k < 3; k++) {
+    diff[k] = cj->loc[k] - ci->loc[k];
+    if (periodic && diff[k] < -dim[k] * 0.5)
+      shift[k] = dim[k];
+    else if (periodic && diff[k] > dim[k] * 0.5)
+      shift[k] = -dim[k];
+    else
+      shift[k] = 0.0;
+    diff[k] += shift[k];
+  }
+
+  /* Loop over particles and find which particles belong in the same group. */
+  for (size_t i = 0; i < count_i; i++) {
+
+    const struct part *restrict pi = &parts_i[i];
+
+    /* Ignore inhibited particles */
+    if (pi->time_bin >= time_bin_inhibited) continue;
+
+    /* Check whether we ignore this particle type altogether */
+    // Here we do not use if-statement since pi is already comfirmed to be
+    // a hydro particle
+
+    /* Check density threshold */
+    if (pi->rho < props->rho_min) continue;
+
+// #ifdef SWIFT_DEBUG_CHECKS
+//     if (pi->ti_drift != ti_current)
+//       error("Running FOF on an un-drifted particle!");
+// #endif
+
+    const double pix = pi->x[0] - shift[0];
+    const double piy = pi->x[1] - shift[1];
+    const double piz = pi->x[2] - shift[2];
+
+    /* Find the root of pi. */
+    size_t root_i = fof_cloud_find(offset_i[i], group_index);
+
+    for (size_t j = i + 1; j < count_j; j++) {
+
+      const struct part *restrict pj = &parts_j[j];
+
+      /* Ignore inhibited particles */
+      if (pi->time_bin >= time_bin_inhibited) continue;
+
+      /* Check density threshold */
+      if (pj->rho < props->rho_min) continue;
+
+      /* Find the root of pj. */
+      const size_t root_j = fof_cloud_find(offset_j[j], group_index);
+
+      /* Skip particles in the same group. */
+      if (root_i == root_j) continue;
+
+      const double pjx = pj->x[0];
+      const double pjy = pj->x[1];
+      const double pjz = pj->x[2];
+
+      /* Compute pairwise distance (periodic BCs were accounted
+       for by the shift vector) */
+      float dx[3], r2 = 0.0f;
+      dx[0] = pix - pjx;
+      dx[1] = piy - pjy;
+      dx[2] = piz - pjz;
+
+      for (int k = 0; k < 3; k++) r2 += dx[k] * dx[k];
+
+      /* Hit or miss? */
+      if (r2 < l_x2) {
+
+        /* Merge the groups */
+        fof_cloud_union(&root_i, root_j, group_index);
+      }
+    }
+  }
+}
 
 /**
  * @brief Recursively perform a union-find FOF cloud on a cell.
@@ -454,7 +663,6 @@ void rec_fof_cloud_search_self(const struct fof_cloud_props *props,
   /* Otherwise, compute self-interaction. */
   else
     fof_cloud_search_self_cell(props, search_r2, space_parts, c);
-
 }
 
 /**
@@ -466,18 +674,56 @@ void rec_fof_cloud_search_self(const struct fof_cloud_props *props,
  * @param dim The dimension of the space.
  * @param search_r2 the square of the FOF cloud linking length.
  * @param periodic Are we using periodic BCs?
- * @param space_parts The start of the #gpart array in the #space structure.
+ * @param space_parts The start of the #part array in the #space structure.
  * @param ci The first #cell in which to perform FOF cloud.
  * @param cj The second #cell in which to perform FOF cloud.
  */
 void rec_fof_cloud_search_pair(const struct fof_cloud_props *props,
                                const double dim[3], const double search_r2,
-                               const int periodic, const struct part *const space_parts,
+                               const int periodic,
+                               const struct part *const space_parts,
                                struct cell *restrict ci, struct cell *restrict cj) {
 
   /* Find the shortest distance between cells, remembering to account for
    * boundary conditions. */
+  const double r2 = cell_min_dist_fof_cloud(ci, cj, dim);
 
+#ifdef SWIFT_DEBUG_CHECKS
+  if (ci == cj) error("Pair FoF cloud called on same cell!!!");
+#endif
+
+  /* Return if cells are out of range of each other. */
+  if (r2 > search_r2) return;
+
+  /* Recurse on both cells if they are both split. */
+  if (ci->split && cj->split) {
+    for (int k = 0; k < 8; k++) {
+      if (ci->progeny[k] != NULL) {
+
+        for (int l = 0; l < 8; l++)
+          if (cj->progeny[l] != NULL)
+            rec_fof_cloud_search_pair(props, dim, search_r2, periodic, space_parts,
+                                      ci->progeny[k], cj->progeny[l]);
+      }
+    }
+  } else if (ci->split) {
+    for (int k = 0; k < 8; k++) {
+      if (ci->progeny[k] != NULL)
+        rec_fof_cloud_search_pair(props, dim, search_r2, periodic, space_parts,
+                                  ci->progeny[k], cj);
+    }
+  } else if (cj->split) {
+    for (int k = 0; k < 8; k++) {
+      if (cj->progeny[k] != NULL)
+        rec_fof_cloud_search_pair(props, dim, search_r2, periodic, space_parts, ci,
+                                  cj->progeny[k]);
+    }
+  } else {
+    /* Perform FOF cloud search between pairs of cells that are within the linking
+     * length and not the same cell. */
+    fof_cloud_search_pair_cells(props, dim, search_r2, periodic, space_parts, ci,
+                                cj);
+  }
 }
 
 /**

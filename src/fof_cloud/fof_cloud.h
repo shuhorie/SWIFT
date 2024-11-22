@@ -107,6 +107,12 @@ void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
                                 const double l_x2,
                                 const struct part *const space_parts,
                                 const struct cell *c);
+void fof_cloud_search_pair_cells(const struct fof_cloud_props *props,
+                                 const double dim[3], const double l_x2,
+                                 const int periodic,
+                                 const struct part *const space_parts,
+                                 const struct cell *restrict ci,
+                                 const struct cell *restrict cj);
 void rec_fof_cloud_search_self(const struct fof_cloud_props *props,
                                const double dim[3], const double search_r2,
                                const int periodic,
