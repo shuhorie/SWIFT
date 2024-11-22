@@ -974,10 +974,87 @@ void engine_allocate_foreign_particles_fof_cloud(struct engine *e) {
 
 #ifdef WITH_MPI
 
+  const int nr_proxies = e->nr_proxies;
+  const int with_hydro =
+      e->policy & (engine_policy_hydro | engine_policy_grid_hydro);
+  // const int with_stars = e->policy & engine_policy_stars;
+  struct space *s = e->s;
+  ticks tic = getticks();
+
+  /* Count the number of particles we need to import and re-allocate
+     the buffer if needed. */
+  size_t count_parts_in = 0;
+  for (int k = 0; k < nr_proxies; k++) {
+    for (int j = 0; j < e->proxies[k].nr_cells_in; j++) {
+
+      if (e->proxies[k].cells_in_type[j] & proxy_cell_type_hydro) {
+        count_parts_in += cell_count_parts_for_tasks(e->proxies[k].cells_in[j]);
+      }
+    }
+  }
+
+  if (!with_hydro && count_parts_in)
+    error(
+        "Not running with hydro but about to receive gas particles in "
+        "proxies!");
+
+  if (e->verbose)
+    message("Counting number of foreign particles took %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Allocate space for the foreign particles we will receive */
+  size_t old_size_parts_foreign = s->size_parts_foreign;
+  if (count_parts_in > old_size_parts_foreign) {
+    if (s->parts_foreign != NULL) swift_free("parts_foreign", s->parts_foreign);
+    s->size_parts_foreign = engine_foreign_alloc_margin * count_parts_in;
+    if (swift_memalign("parts_foreign", (void **)&s->parts_foreign, part_align,
+                       sizeof(struct part) * s->size_parts_foreign) != 0)
+      error("Failed to allocate foreign part data.");
+  }
+
+  if (e->verbose) {
+    message(
+        "Allocating %zd foreign part (%zd MB)",
+        s->size_parts_foreign,
+        s->size_parts_foreign * sizeof(struct part) / (1024 * 1024));
+
+    if ((s->size_parts_foreign - old_size_parts_foreign) > 0) {
+      message(
+        "Re-allocations %zd part (%zd MB)",
+        (s->size_parts_foreign - old_size_parts_foreign),
+        (s->size_parts_foreign - old_size_parts_foreign) *
+            sizeof(struct part) / (1024 * 1024));
+    }
+  }
+
+  /* Unpack the cells and link to the particle data. */
+  struct part *parts = s->parts_foreign;
+  for (int k = 0; k < nr_proxies; k++) {
+    for (int j = 0; j < e->proxies[k].nr_cells_in; j++) {
+
+      if (e->proxies[k].cells_in_type[j] & proxy_cell_type_hydro) {
+
+        const size_t count_parts =
+            cell_link_foreign_parts(e->proxies[k].cells_in[j], parts);
+        parts = &parts[count_parts];
+      }
+    }
+  }
+
+  /* Updata the counters */
+  s->nr_parts_foreign = parts - s->parts_foreign;
+
+  if (e->verbose)
+    message("Recursively linking foreign arrays took %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
 #else
   error("SWIFT was not compiled with MPI support.");
 #endif /* WITH_MPI*/
 }
+
 void engine_do_tasks_count_mapper(void *map_data, int num_elements,
                                   void *extra_data) {
 
