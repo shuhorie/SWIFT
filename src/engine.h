@@ -786,6 +786,7 @@ void engine_make_fof_cloud_tasks(struct engine *e);
 /* Function prototypes, fof_cloud/engine_fof_cloud.c. */
 void engine_fof_cloud(struct engine *e,
                       const int foreign_buffers_allocated);
+void engine_activate_part_comms(struct engine *e);
 
 /* Function prototypes, engine_split_particles.c. */
 void engine_split_gas_particles(struct engine *e);

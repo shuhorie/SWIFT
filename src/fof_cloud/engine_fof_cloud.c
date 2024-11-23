@@ -14,6 +14,47 @@
 /* Local headers. */
 #include "fof_cloud.h"
 
+/**
+ * @brief Activate all the #part communications in preparation
+ * fof a call to FOF cloud.
+ *
+ * All the other task types are never skipped.
+ *
+ * @param e The #engine to act on.
+ */
+void engine_activate_part_comms(struct engine *e) {
+
+#ifdef WITH_MPI
+
+  const ticks tic = getticks();
+
+  struct scheduler *s = &e->sched;
+  const int nr_tasks = s->nr_tasks;
+  struct task *tasks = s->tasks;
+
+  for (int k = 0; k < nr_tasks; ++k) {
+
+    struct task *t = &tasks[k];
+
+    if ((t->type == task_type_send) && (t->subtype == task_subtype_part)) {
+      scheduler_activate(s, t);
+    } else if ((t->type == task_type_recv) &&
+               (t->subtype == task_subtype_part)) {
+      scheduler_activate(s, t);
+    }
+    // else {
+    //   t->skip = 1;
+    // }
+  }
+
+  if (e->verbose)
+    message("took %.3f %s.", clocks_from_ticks(getticks() - tic),
+            clocks_getunit());
+
+#else
+  error("Calling an MPI function in non-MPI mode.");
+#endif
+}
 
 /**
  * @brief Activate all the FoF linking tasks for cloud finding.

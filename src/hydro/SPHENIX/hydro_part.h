@@ -41,6 +41,7 @@
 #include "star_formation_struct.h"
 #include "timestep_limiter_struct.h"
 #include "tracers_struct.h"
+#include "fof_cloud_struct.h"
 
 /**
  * @brief Particle fields not needed during the SPH loops over neighbours.
@@ -246,6 +247,9 @@ struct part {
 
   /*! RT sub-cycling time stepping data */
   struct rt_timestepping_data rt_time_data;
+
+  /*! Particle FoF cloud properties (group ID, group size, ...) */
+  struct fof_cloud_part_data fof_cloud_data;
 
   /*! Time-step length */
   timebin_t time_bin;

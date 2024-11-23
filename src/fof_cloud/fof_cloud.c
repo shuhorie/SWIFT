@@ -27,6 +27,11 @@
 #include "inline.h"
 #include "timers.h"
 #include "hashmap.h"
+#include "proxy.h"
+
+#define fof_cloud_props_default_group_id 2147483647
+#define fof_cloud_props_default_group_id_offset 1
+#define fof_cloud_props_default_group_link_size 20000
 
 /* Constants. */
 #define FOF_CLOUD_COMPRESS_PATHS_MIN_LENGTH (2)
@@ -72,6 +77,70 @@ void fof_cloud_init(struct fof_cloud_props *props,
   }
 
 }
+
+#ifdef WITH_MPI
+
+/**
+ * @brief Check whether a given group ID is on the local node.
+ *
+ * This function only makes sense in MPI mode.
+ *
+ * @param group_id The ID to check.
+ * @param nr_parts The number of parts on this node.
+ */
+__attribute__((always_inline)) INLINE static int is_local_fof_cloud(
+    const size_t group_id, const size_t nr_parts) {
+#ifdef WITH_MPI
+  return (group_id >= node_offset_cloud && group_id < node_offset_cloud + nr_parts);
+#else
+  error("Calling MPI function in non-MPI mode");
+  return 1;
+#endif
+}
+
+/**
+ * @brief Find the global root ID of a given particle
+ *
+ * This function only makes sense in MPI mode.
+ *
+ * @param i Index of the particle.
+ * @param group_index Array of group root indices.
+ * @param nr_parts The number of hydro-particles on this node.
+ */
+__attribute__((always_inline)) INLINE static size_t fof_cloud_find_global(
+    const size_t i, const size_t *group_index, const size_t nr_parts) {
+
+#ifdef WITH_MPI
+  size_t root = node_offset_cloud + i;
+  if (!is_local_fof_cloud(root, nr_parts)) {
+
+    /* Non local --> This is the root */
+    return root;
+  } else {
+
+    /* Local --> Follow the links until we find the root */
+    while (root != group_index[root - node_offset_cloud]) {
+      root = group_index[root - node_offset_cloud];
+      if (!is_local_fof_cloud(root, nr_parts)) break;
+    }
+  }
+
+  /* Perform path compression. */
+  // int index = i;
+  // while(index != root) {
+  //  int next = group_index[index];
+  //  group_index[index] = root;
+  //  index = next;
+  //}
+
+  return root;
+#else
+  error("Calling MPI function in non-MPI mode");
+  return -1;
+#endif
+
+}
+#endif /* WITH_MPI */
 
 /**
  * @brief Mapper function to set the initial group indices.
@@ -670,6 +739,183 @@ void rec_fof_cloud_search_self(const struct fof_cloud_props *props,
     fof_cloud_search_self_cell(props, search_r2, space_parts, c);
 }
 
+#ifdef WITH_MPI
+
+/**
+ * @brief Add a local<->foreign pair in range to the list of links
+ *
+ * Possibly reallocates the local_group_links if we run out of space.
+ */
+static INLINE void add_foreign_link_to_list_fof_cloud(
+    int *local_link_count, int *group_links_size, struct fof_cloud_mpi **group_links,
+    struct fof_cloud_mpi **local_group_links, const size_t root_i,
+    const size_t root_j, const size_t size_i, const size_t size_j) {
+
+  /* If the group_links array is not big enough re-allocate it. */
+  if (*local_link_count + 1 > *group_links_size) {
+
+    const int new_size = 2 * (*group_links_size);
+
+    *group_links_size = new_size;
+
+    (*group_links) = (struct fof_cloud_mpi *)realloc(
+        *group_links, new_size * sizeof(struct fof_cloud_mpi));
+
+    /* Reset the local pointer */
+    (*local_group_links) = *group_links;
+
+    message("Re-allocating local group links from %d to %d elements.",
+            *local_link_count, new_size);
+
+    if (new_size < 0) error("Overflow in size of list of foreign links");
+  }
+
+  /* Store the particle group properties for communication. */
+  (*local_group_links)[*local_link_count].group_i = root_i;
+  (*local_group_links)[*local_link_count].group_i_size = size_i;
+
+  (*local_group_links)[*local_link_count].group_j = root_j;
+  (*local_group_links)[*local_link_count].group_j_size = size_j;
+
+  (*local_link_count)++;
+}
+#endif /* WITH_MPI */
+
+/* Perform a FOF cloud search between a local and foreign cell using the Union-Find
+ * algorithm. Store any links found between particles.*/
+void fof_cloud_search_pair_cells_foreign(
+    const struct fof_cloud_props *props, const double dim[3], const double l_x2,
+    const int periodic, const struct part *const space_parts,
+    const size_t nr_parts, const struct cell *restrict ci,
+    const struct cell *restrict cj, int *restrict link_count,
+    struct fof_cloud_mpi **group_links, int *restrict group_links_size) {
+
+#ifdef WITH_MPI
+
+  const size_t count_i = ci->hydro.count;
+  const size_t count_j = cj->hydro.count;
+  const struct part *parts_i = ci->hydro.parts;
+  const struct part *parts_j = cj->hydro.parts;
+
+  /* Get local pointers */
+  const size_t *restrict group_index = props->group_index;
+  const size_t *restrict group_size = props->group_size;
+
+  /* Values local to this function to avoid dereferencing */
+  struct fof_cloud_mpi *local_group_links = *group_links;
+  int local_link_count = *link_count;
+
+  /* Make a list of particle offsets into the global parts array. */
+  const size_t *const offset_i =
+      group_index + (ptrdiff_t)(parts_i - space_parts);
+
+#ifdef SWIFT_DEBUG_CHECKS
+
+  /* Check whether cells are local to the node. */
+  const int ci_local = (ci->nodeID == engine_rank);
+  const int cj_local = (cj->nodeID == engine_rank);
+
+  if ((ci_local && cj_local) || (!ci_local && !cj_local))
+    error(
+        "FOF cloud search of foreign cells called on two local cells or two foreign "
+        "cells.");
+
+  if (!ci_local) {
+    error("Cell ci, is not local.");
+  }
+#endif
+
+  double shift[3] = {0.0, 0.0, 0.0};
+
+  /* Get the relative distance between the pairs, wrapping. */
+  for (int k = 0; k < 3; k++) {
+    const double diff = cj->loc[k] - ci->loc[k];
+    if (periodic && diff < -dim[k] / 2)
+      shift[k] = dim[k];
+    else if (periodic && diff > dim[k] / 2)
+      shift[k] = -dim[k];
+    else
+      shift[k] = 0.0;
+  }
+
+  /* Loop over particles and find which particles belong in the same group. */
+  for (size_t i = 0; i < count_i; i++) {
+
+    const struct part *pi = &parts_i[i];
+
+    /* Ignore inhibited particles */
+    if (pi->time_bin >= time_bin_inhibited) continue;
+
+    /* Check whether we ignore this particle type altogether */
+    // Here we do not use if-statement since pi is already comfirmed to be
+    // a hydro particle
+
+    /* Check density threshold */
+    if (pi->rho < props->rho_min) continue;
+
+    const double pix = pi->x[0] - shift[0];
+    const double piy = pi->x[1] - shift[1];
+    const double piz = pi->x[2] - shift[2];
+
+    /* Find the root of pi. */
+    const size_t root_i =
+        fof_cloud_find_global(offset_i[i] - node_offset_cloud, group_index, nr_parts);
+
+    for (size_t j = 0; j < count_j; j++) {
+
+      const struct part *pj = &parts_j[j];
+
+      /* Ignore inhibited particles */
+      if (pj->time_bin >= time_bin_inhibited) continue;
+
+      /* Check whether we ignore this particle type altogether */
+      // Here we do not use if-statement since pi is already comfirmed to be
+      // a hydro particle
+
+      /* Check density threshold */
+      if (pi->rho < props->rho_min) continue;
+
+      const double pjx = pj->x[0];
+      const double pjy = pj->x[1];
+      const double pjz = pj->x[2];
+
+      /* Compute pairwise distance (periodic BCs were accounted
+       for by the shift vector) */
+      float dx[3], r2 = 0.0f;
+      dx[0] = pix - pjx;
+      dx[1] = piy - pjy;
+      dx[2] = piz - pjz;
+
+      for (int k = 0; k < 3; k++) r2 += dx[k] * dx[k];
+
+      /* Hit or miss? */
+      if (r2 < l_x2) {
+
+        /* Check that the links have not already been added to the list. */
+        for (int l = 0; l < local_link_count; l++) {
+          if (local_group_links[l].group_i == root_i &&
+              local_group_links[l].group_j == pj->fof_cloud_data.group_id) {
+            continue;
+          }
+        }
+
+        /* Add a possible link to the list */
+        add_foreign_link_to_list_fof_cloud(
+            &local_link_count, group_links_size, group_links,
+            &local_group_links, root_i, pj->fof_cloud_data.group_id,
+            group_size[root_i - node_offset_cloud], pj->fof_cloud_data.group_size);
+      }
+    }
+  }
+
+  /* Update the returned values */
+  *link_count = local_link_count;
+
+#else
+  error("Calling MPI function in non-MPI mode.");
+#endif /* WITH_MPI */
+}
+
 /**
  * @brief Recursively perform a union-find FOF cloud between two cells.
  *
@@ -731,6 +977,247 @@ void rec_fof_cloud_search_pair(const struct fof_cloud_props *props,
   }
 }
 
+#ifdef WITH_MPI
+
+/* Recurse on a pair of cells (one local, one foreign) and perform a FOF cloud search
+ * between cells that are within range. */
+void rec_fof_cloud_search_pair_foreign(
+    const struct fof_cloud_props *props, const double dim[3], const double search_r2,
+    const int periodic, const struct part *const space_parts,
+    const size_t nr_parts, const struct cell *ci, const struct cell *cj,
+    int *restrict link_count, struct fof_cloud_mpi **group_links,
+    int *restrict group_links_size) {
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (ci == cj) error("Pair FOF cloud called on same cell!!!");
+  if (ci->nodeID == cj->nodeID) error("Fully local pair!");
+#endif
+
+  /* Find the shortest distance between cells, remembering to account for
+   * boundary conditions. */
+  const double r2 = cell_min_dist_fof_cloud(ci, cj, dim);
+
+  /* Return if cells are out of range of each other */
+  if (r2 > search_r2) return;
+
+  /* Recurse on both cells if they are both split */
+  if (ci->split && cj->split) {
+    for (int k = 0; k < 8; k++) {
+      if (ci->progeny[k] != NULL) {
+
+        for (int l = 0; l < 8; l++) {
+          if (cj->progeny[l] != NULL) {
+            rec_fof_cloud_search_pair_foreign(props, dim, search_r2, periodic,
+                                              space_parts, nr_parts, ci->progeny[k],
+                                              cj->progeny[l], link_count, group_links,
+                                              group_links_size);
+          }
+        }
+      }
+    }
+  } else if (ci->split) {
+
+    for (int k = 0; k < 8; k++) {
+      if (ci->progeny[k] != NULL) {
+        rec_fof_cloud_search_pair_foreign(props, dim, search_r2, periodic,
+                                          space_parts, nr_parts, ci->progeny[k], cj,
+                                          link_count, group_links, group_links_size);
+      }
+    }
+  } else if (cj->split) {
+
+    for (int k = 0; k < 8; k++) {
+      if (cj->progeny[k] != NULL) {
+        rec_fof_cloud_search_pair_foreign(props, dim, search_r2, periodic,
+                                          space_parts, nr_parts, ci, cj->progeny[k],
+                                          link_count, group_links, group_links_size);
+      }
+    }
+  } else {
+    /* Perform FOF cloud search between pairs of cells that are within the linking
+     * length and not the same cell. */
+    fof_cloud_search_pair_cells_foreign(props, dim, search_r2, periodic, space_parts,
+                                        nr_parts, ci, cj, link_count, group_links,
+                                        group_links_size);
+  }
+}
+#endif
+
+/**
+ * @brief Mapper function to perform FOF search.
+ *
+ * @param map_data An array of #cell pair indices.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to a #space.
+ */
+void fof_cloud_find_foreign_links_mapper(void *map_data, int num_elements,
+                                         void *extra_data) {
+
+#ifdef WITH_MPI
+
+  /* Retrieve mapped data. */
+  struct space *s = (struct space *)extra_data;
+  const int periodic = s->periodic;
+  const size_t nr_parts = s->nr_parts;
+  const struct part *const parts = s->parts;
+  const struct engine *e = s->e;
+  struct fof_cloud_props *props = e->fof_cloud_properties;
+  struct cloud_cell_pair_indices *cell_pairs =
+      (struct cloud_cell_pair_indices *)map_data;
+
+  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
+  const double search_r2 = props->l_x2;
+
+  /* Store links in an array local to this thread. */
+  int local_link_count = 0;
+  int local_group_links_size = props->group_links_size / e->nr_threads;
+
+  /* Init the local group links buffer. */
+  struct fof_cloud_mpi *local_group_links = (struct fof_cloud_mpi *)swift_calloc(
+      "fof_cloud_group_links", sizeof(struct fof_cloud_mpi), local_group_links_size);
+  if (local_group_links == NULL)
+    error("Failed to allocate temporary group links buffer.");
+
+  /* Loop over all pairs of local and foreign cells, recurse then perform a
+   * FOF cloud search. */
+  for (int ind = 0; ind < num_elements; ind++) {
+
+    /* Get the local and foreign cells to recurse on */
+    const struct cell *restrict local_cell = cell_pairs[ind].local;
+    const struct cell *restrict foreign_cell = cell_pairs[ind].foreign;
+
+    rec_fof_cloud_search_pair_foreign(props, dim, search_r2, periodic, parts,
+                                      nr_parts, local_cell, foreign_cell,
+                                      &local_link_count, &local_group_links,
+                                      &local_group_links_size);
+  }
+
+  /* Add links found by this thread to the global link list. */
+  /* Lock to prevent race conditions while adding to the global link list.*/
+  if (lock_lock(&s->lock) == 0) {
+
+    /* get pointers to global arrays */
+    int *restrict group_links_size = &props->group_links_size;
+    int *restrict group_link_count = &props->group_link_count;
+    struct fof_cloud_mpi **group_links = &props->group_links;
+
+    /* If the global group_links array is not big enough re-allocate it. */
+    if (*group_link_count + local_link_count > *group_links_size) {
+
+      const int old_size = *group_links_size;
+      const int new_size =
+          max(*group_link_count + local_link_count, 2 * old_size);
+
+      (*group_links) = (struct fof_cloud_mpi *)realloc(
+          *group_links, new_size * sizeof(struct fof_cloud_mpi));
+
+      *group_links_size = new_size;
+
+      message("Re-allocating global group links from %d to %d elements.",
+              old_size, new_size);
+    }
+
+    /* Copy the local links to the global list */
+    for (int i = 0; i < local_link_count; i++) {
+
+      int found = 0;
+
+      /* Check that the links have not already been added to the list by another
+       * thread. */
+      for (int l = 0; l < *group_link_count; l++) {
+        if ((*group_links)[l].group_i == local_group_links[i].group_i &&
+            (*group_links)[l].group_j == local_group_links[i].group_j) {
+          found = 1;
+          break;
+        }
+      }
+
+      if (!found) {
+
+        (*group_links)[*group_link_count].group_i =
+            local_group_links[i].group_i;
+        (*group_links)[*group_link_count].group_i_size =
+            local_group_links[i].group_i_size;
+
+        (*group_links)[*group_link_count].group_j =
+            local_group_links[i].group_j;
+        (*group_links)[*group_link_count].group_j_size =
+            local_group_links[i].group_j_size;
+
+        (*group_link_count) = (*group_link_count) + 1;
+      }
+    }
+  }
+
+  /* Release lock. */
+  if (lock_unlock(&s->lock) != 0) error("Failed to unlock the space");
+
+  swift_free("fof_local_group_links", local_group_links);
+#endif /* WITH_MPI */
+}
+
+struct mapper_data_fof_cloud {
+  size_t *group_index;
+  size_t *group_size;
+  float *distance_to_link;
+  size_t nr_parts;
+  struct part *space_parts;
+};
+
+/**
+ * @brief Mapper function to set the roots of #part%s going to other MPI ranks.
+ *
+ * @param map_data The list of outgoing local cells.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to mapper data.
+ */
+void fof_cloud_set_outgoing_root_mapper(void *map_data, int num_elements,
+                                        void *extra_data) {
+
+#ifdef WITH_MPI
+
+  /* Unpack the data */
+  struct cell **local_cells = (struct cell **)map_data;
+  const struct mapper_data_fof_cloud *data =
+      (struct mapper_data_fof_cloud *)extra_data;
+  const size_t *const group_index = data->group_index;
+  const size_t *const group_size = data->group_size;
+  const size_t nr_parts = data->nr_parts;
+  const struct part *const space_parts = data->space_parts;
+
+  /* Loop over the out-going local cells */
+  for (int i = 0; i < num_elements; i++) {
+
+    /* Get the cell and its parts */
+    struct cell *local_cell = local_cells[i];
+    struct part *parts = local_cell->hydro.parts;
+
+    /* Make a list of particle offsets into the global parts array. */
+    const size_t *const offset =
+        group_index + (ptrdiff_t)(parts - space_parts);
+
+    /* Set each particle's root and group properties found in the local FOF cloud */
+    for (int k = 0; k < local_cell->hydro.count; k++) {
+
+      /* TODO: Can we skip ignorable particles here?
+       * Likely makes no difference */
+
+      /* Recall we did alter the group_index with a global_offset.
+       * We need to remove that here as we want the *local* root */
+      const size_t root =
+          fof_cloud_find_global(offset[k] - node_offset_cloud, group_index, nr_parts);
+
+      /* TODO: Could we call fof_cloud_find() here instead?
+       * Likely yes but we don't want path compression at this stage.
+       * So, probably not */
+      parts[k].fof_cloud_data.group_id = root;
+      parts[k].fof_cloud_data.group_size = group_size[root - node_offset_cloud];
+    }
+  }
+
+#endif /* WITH_MPI */
+}
+
 /**
  * @brief Search foreign cells for links and communicate any found to the
  * appropriate node.
@@ -742,7 +1229,212 @@ void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
                                     const struct space *s) {
 
 #ifdef WITH_MPI
-  printf("fof_cloud_search_foreign_cells\n");
+  struct engine *e =s->e;
+  const int verbose = e->verbose;
+
+  /* Abort if only one nore */
+  if (e->nr_nodes == 1) return;
+
+  size_t *restrict group_index = props->group_index;
+  size_t *restrict group_size = props->group_size;
+  const size_t nr_parts = s->nr_parts;
+  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
+  const double search_r2 = props->l_x2;
+
+  const ticks tic_total = getticks();
+  ticks tic = getticks();
+
+  /* Make group IDs globally unique */
+  for (size_t i = 0; i < nr_parts; i++) group_index[i] += node_offset_cloud;
+
+  struct cloud_cell_pair_indices *cell_pairs = NULL;
+  int cell_pair_count = 0;
+
+  props->group_links_size = fof_cloud_props_default_group_link_size;
+
+  int num_cells_out = 0;
+  int num_cells_in = 0;
+
+  /* Find the maximum no. of cell pairs that can communicate. */
+  for (int  i = 0; i < e->nr_proxies; i++) {
+
+    for (int j = 0; j < e->proxies[i].nr_cells_out; j++) {
+
+      /* Only include hydro cells */
+      if (e->proxies[i].cells_out_type[j] & proxy_cell_type_hydro)
+        num_cells_out++;
+    }
+
+    for (int j = 0; j < e->proxies[i].nr_cells_in; j++) {
+
+      /* Only include hydro cells */
+      if (e->proxies[i].cells_in_type[j] & proxy_cell_type_hydro)
+        num_cells_in++;
+    }
+  }
+
+  if (verbose)
+    message(
+        "Finding max no. of cells + offset IDs"
+        "took: %.3f %s.",
+        clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  const int cell_pair_size = num_cells_in * num_cells_out;
+
+  /* Allocate memory for all the possible cell links */
+  if (swift_memalign("fof_cloud_groups_links", (void **)&props->group_links,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     props->group_links_size * sizeof(struct fof_cloud_mpi)) != 0)
+    error("Error while allocating memory for FOF cloud links over an MPI domain");
+
+  if (swift_memalign("fof_cloud_cell_pairs", (void **)&cell_pairs,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     cell_pair_size * sizeof(struct cloud_cell_pair_indices)) != 0)
+    error("Error while allocating memory for FOF cloud cell pair indices");
+
+  ticks tic_pairs = getticks();
+
+  /* Loop over cells_in and cells_out for each proxy and find which cells are in
+   * range of each other to perform the FOF cloud search. Store local cells that
+   * are touching foreign cells in a list. */
+  for (int i = 0; i < e->nr_proxies; i++) {
+
+    /* Only find links across an MPI rank domain on one rank */
+    if (engine_rank == min(engine_rank, e->proxies[i].nodeID)) {
+
+      for (int j = 0; j < e->proxies[i].nr_cells_out; j++) {
+
+        /* Skip non-hydro cells. */
+        if (!(e->proxies[i].cells_out_type[j] & proxy_cell_type_hydro))
+          continue;
+
+        struct cell *restrict local_cell = e->proxies[i].cells_out[j];
+
+        /* Skip empty cells */
+        if (local_cell->hydro.count == 0) continue;
+
+        for (int k = 0; k < e->proxies[i].nr_cells_in; k++) {
+          
+          /* Skip non-hydro cells */
+          if(!(e->proxies[i].cells_in_type[k] & proxy_cell_type_hydro))
+            continue;
+
+          struct cell *restrict foreign_cell = e->proxies[i].cells_in[k];
+
+          /* Skip empty cells */
+          if (foreign_cell->hydro.count == 0) continue;
+
+          /* Add candidates in range to the list of pairs of cells to treat */
+          const double r2 = cell_min_dist_fof_cloud(local_cell, foreign_cell, dim);
+          if (r2 < search_r2) {
+            cell_pairs[cell_pair_count].local = local_cell;
+            cell_pairs[cell_pair_count].foreign = foreign_cell;
+
+            cell_pair_count++;
+          }
+        }
+      }
+    }
+  }
+
+  if (verbose)
+    message("Finding local/foreign cell pairs took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic_pairs), clocks_getunit());
+
+  const ticks tic_set_roots = getticks();
+
+  /* Set the root of outgoing particles. */
+
+  /* Allocate array of outgoing cells and populate it */
+  struct cell **local_cells =
+      (struct cell **)malloc(num_cells_out * sizeof(struct cell *));
+  int count = 0;
+  for (int i = 0; i < e->nr_proxies; i++) {
+    for (int j = 0; j < e->proxies[i].nr_cells_out; j++) {
+
+      /* Only include hydro cells */
+      if (e->proxies[i].cells_out_type[j] & proxy_cell_type_hydro) {
+
+        local_cells[count] = e->proxies[i].cells_out[j];
+        count++;
+      }
+    }
+  }
+
+  /* Now set the *local* roots of all the parts we are sending */
+  struct mapper_data_fof_cloud data;
+  data.group_index = group_index;
+  data.group_size = group_size;
+  data.nr_parts = nr_parts;
+  data.space_parts = s->parts;
+  threadpool_map(&e->threadpool, fof_cloud_set_outgoing_root_mapper,
+                 local_cells, num_cells_out, sizeof(struct cell **),
+                 threadpool_auto_chunk_size, &data);
+
+  if (verbose)
+    message("Initialising particle roots took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic_set_roots), clocks_getunit());
+
+  free(local_cells);
+
+  if (verbose)
+    message(
+        "Finding local/foreign cell pairs and initialising particle roots "
+        "took: %.3f %s.",
+        clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  /* Activate the tasks exchanging all the required parts */
+  engine_activate_part_comms(e);
+
+  ticks local_fof_tic = getticks();
+
+  /* Wait for all the communication tasks to be ready */
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  if (verbose)
+    message("Local FOF cloud imbalance: %.3f %s.",
+            clocks_from_ticks(getticks() - local_fof_tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Perform send and receive tasks. */
+  engine_launch(e, "fof cloud comms");
+
+  if (verbose)
+    message("MPI send/recv comms took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  /* We have now recevied the foreign particles. Each particle received
+   * carries information about its own *foreign* (to us) root and the
+   * size of the group fragment it belongs too its original foreign rank. */
+
+  tic = getticks();
+
+  props->group_link_count = 0;
+
+  /* Perform search of group links between local and foreign cells with the
+   * threadpool. */
+  threadpool_map(&s->e->threadpool, fof_cloud_find_foreign_links_mapper, cell_pairs,
+                 cell_pair_count, sizeof(struct cloud_cell_pair_indices), 1,
+                 (struct space *)s);
+
+  /* Clean up memory used by foreign particles. */
+  swift_free("fof_cell_pairs", cell_pairs);
+
+  tic = getticks();
+
+  const ticks comms_tic = getticks();
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  if (verbose)
+    message("Imbalance took: %.3f %s.",
+            clocks_from_ticks(getticks() - comms_tic), clocks_getunit());
+
+  if (verbose)
+    message("fof_cloud_search_foreign_cells() took (FOF_CLOUD SCALING): %.3f %s.",
+            clocks_from_ticks(getticks() - tic_total), clocks_getunit());
+
 #endif /* WITH_MPI */
 }
 

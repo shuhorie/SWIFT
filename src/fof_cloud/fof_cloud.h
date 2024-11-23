@@ -94,8 +94,63 @@ struct fof_cloud_props {
 
   /*! The links between pairs of particles on this node and a foreign
    * node */
-  struct fof_mpi *group_links;
+  struct fof_cloud_mpi *group_links;
 };
+
+/* Store group size and offset into array. */
+struct cloud_group_length {
+
+  size_t index, size;
+
+} SWIFT_STRUCT_ALIGN;
+
+#ifdef WITH_MPI
+
+/* MPI message required for FOF. */
+struct fof_cloud_mpi {
+
+  /* The local particle's root ID.*/
+  size_t group_i;
+
+  /* The local group's size.*/
+  size_t group_i_size;
+
+  /* The foreign particle's root ID.*/
+  size_t group_j;
+
+  /* The local group's size.*/
+  size_t group_j_size;
+};
+
+/* Struct used to find final group ID when using MPI */
+struct fof_cloud_final_index {
+  size_t local_root;
+  size_t global_root;
+};
+
+/* Struct used to find the total mass of a group when using MPI */
+struct fof_cloud_final_mass {
+  size_t global_root;
+  double group_mass;
+  long long final_group_size;
+  double first_position[3];
+  double centre_of_mass[3];
+  long long max_part_density_index;
+  float max_part_density;
+};
+
+/* Struct used to iterate over the hash table and unpack the mass fragments of a
+ * group when using MPI */
+struct fof_cloud_mass_send_hashmap {
+  struct fof_final_mass *mass_send;
+  size_t nsend;
+};
+
+/* Store local and foreign cell indices that touch. */
+struct cloud_cell_pair_indices {
+  struct cell *local, *foreign;
+};
+#endif /* WITH_MPI */
 
 /* Function prototypes. */
 void fof_cloud_init(struct fof_cloud_props *fcp,
