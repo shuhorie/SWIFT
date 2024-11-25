@@ -55,19 +55,39 @@ void fof_cloud_init(struct fof_cloud_props *props,
 
   /* Main operation modes ------------------------------------------------- */
 
+  /* Read value of absolute linking length asked by the user */
   props->l_x_absolute =
       parser_get_param_double(params, "FOFCloud:Linking_Length_in_cgs") /
       units_cgs_conversion_factor(us, UNIT_CONV_LENGTH);
 
   props->l_x2 = props->l_x_absolute * props->l_x_absolute;
 
+  /* Read value of minimum hydro density asked by the user */
   props->rho_min =
       parser_get_param_double(params, "FOFCloud:Density_Threshold_in_cgs") /
       units_cgs_conversion_factor(us, UNIT_CONV_DENSITY);
 
+  /* Read the minimum group size. */
   props->min_group_size =
       parser_get_param_int(params, "FOFCloud:min_group_size");
 
+  /* Read the default group ID of particles in groups below the minimum group
+   * size. */
+  props->group_id_default = parser_get_opt_param_int(
+      params, "FOFCloud:group_id_default", fof_cloud_props_default_group_id);
+
+  /* Read the starting group ID. */
+  props->group_id_offset = parser_get_opt_param_int(
+      params, "FOFCloud:group_id_offset", fof_cloud_props_default_group_id_offset);
+
+  if (props->l_x_absolute <= 0.)
+    error("The FOF cloud linking length can't be negative!");
+
+  if (props->rho_min <= 0.)
+    error("The FOF cloud density threshold can't be negative!");
+
+  if (props->min_group_size <= 0.)
+    error("The FOF cloud group size can't be negative!");
 
   if (engine_rank == 0) {
     message("Properties of FoF for cloud finding (code units)");

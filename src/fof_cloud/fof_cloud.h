@@ -41,17 +41,10 @@ struct fof_cloud_props {
   /*! ID of the first (largest) group. */
   size_t group_id_offset;
 
-  /*! The types of particles to use for linking */
-  int fof_linking_types[swift_type_count];
-
   /* ------------  Group properties ----------------- */
 
   /*! Number of groups */
   long long num_groups;
-
-  /*! Number of local black holes that belong to groups whose roots are on a
-   * different node. */
-  int extra_bh_seed_count;
 
   /*! Index of the root particle of the group a given gpart belongs to. */
   size_t *group_index;
