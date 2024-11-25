@@ -36,10 +36,10 @@ void engine_activate_part_comms(struct engine *e) {
 
     struct task *t = &tasks[k];
 
-    if ((t->type == task_type_send) && (t->subtype == task_subtype_part)) {
+    if ((t->type == task_type_send) && (t->subtype == task_subtype_rho)) {
       scheduler_activate(s, t);
     } else if ((t->type == task_type_recv) &&
-               (t->subtype == task_subtype_part)) {
+               (t->subtype == task_subtype_rho)) {
       scheduler_activate(s, t);
     }
     // else {

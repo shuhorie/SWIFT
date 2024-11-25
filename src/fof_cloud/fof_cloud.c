@@ -1314,7 +1314,7 @@ void fof_cloud_search_foreign_cells(struct fof_cloud_props *props,
         if (local_cell->hydro.count == 0) continue;
 
         for (int k = 0; k < e->proxies[i].nr_cells_in; k++) {
-          
+
           /* Skip non-hydro cells */
           if(!(e->proxies[i].cells_in_type[k] & proxy_cell_type_hydro))
             continue;
