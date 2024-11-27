@@ -157,7 +157,7 @@ void engine_fof_cloud(struct engine *e,
   }
 
   if (engine_rank == 0)
-    message("Complete FoF search for cloud finding took: %.3f %s.",
+    message("Complete FoF cloud search for cloud finding took: %.3f %s.",
             clocks_from_ticks(getticks() - tic), clocks_getunit());
 
 #else
