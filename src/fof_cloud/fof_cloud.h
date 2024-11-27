@@ -150,6 +150,7 @@ void fof_cloud_init(struct fof_cloud_props *fcp,
                     struct swift_params *params,
                     const struct phys_const *phys_const,
                     const struct unit_system *us);
+void fof_cloud_create_mpi_types(void);
 void fof_cloud_allocate(const struct space *s, struct fof_cloud_props *props);
 void fof_cloud_search_self_cell(const struct fof_cloud_props *props,
                                 const double l_x2,

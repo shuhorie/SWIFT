@@ -34,11 +34,21 @@
 #define fof_cloud_props_default_group_link_size 20000
 
 /* Constants. */
+#define CLOUD_UNION_BY_SIZE_OVER_MPI (1)
 #define FOF_CLOUD_COMPRESS_PATHS_MIN_LENGTH (2)
+
+#ifdef WITH_MPI
+
+/* MPI types used for communications */
+MPI_Datatype fof_cloud_mpi_type;
+MPI_Datatype cloud_group_length_mpi_type;
+MPI_Datatype fof_cloud_final_index_type;
+MPI_Datatype fof_cloud_final_mass_type;
 
 /*! Offset between the first particle on this MPI rank and the first particle in
  * the global order */
 size_t node_offset_cloud;
+#endif /* WITH_MPI */
 
 /**
  * @brief Initialise the properties of the FOF code for cloud finding.
@@ -96,6 +106,47 @@ void fof_cloud_init(struct fof_cloud_props *props,
     message("Min group size         = %d", props->min_group_size);
   }
 
+#if defined(WITH_MPI) && defined(UNION_BY_SIZE_OVER_MPI)
+  if (engine_rank == 0)
+    message(
+        "Performing FOF cloud over MPI using union by size and union by rank "
+        "locally.");
+#else
+  message("Performing FOF cloud using union by rank.");
+#endif
+}
+
+/**
+ * @brief Registers MPI types used by FOF cloud.
+ */
+void fof_cloud_create_mpi_types(void) {
+
+#ifdef WITH_MPI
+  if (MPI_Type_contiguous(sizeof(struct fof_cloud_mpi) / sizeof(unsigned char),
+                          MPI_BYTE, &fof_cloud_mpi_type) != MPI_SUCCESS ||
+      MPI_Type_commit(&fof_cloud_mpi_type) != MPI_SUCCESS) {
+    error("Failed to create MPI type for fof_cloud.");
+  }
+  if (MPI_Type_contiguous(sizeof(struct cloud_group_length) / sizeof(unsigned char),
+                          MPI_BYTE, &cloud_group_length_mpi_type) != MPI_SUCCESS ||
+      MPI_Type_commit(&cloud_group_length_mpi_type) != MPI_SUCCESS) {
+    error("Failed to create MPI type for cloud_group_length.");
+  }
+  /* Define type for sending fof_final_index struct */
+  if (MPI_Type_contiguous(sizeof(struct fof_cloud_final_index), MPI_BYTE,
+                          &fof_cloud_final_index_type) != MPI_SUCCESS ||
+      MPI_Type_commit(&fof_cloud_final_index_type) != MPI_SUCCESS) {
+    error("Failed to create MPI type for fof_cloud_final_index.");
+  }
+  /* Define type for sending fof_final_mass struct */
+  if (MPI_Type_contiguous(sizeof(struct fof_cloud_final_mass), MPI_BYTE,
+                          &fof_cloud_final_mass_type) != MPI_SUCCESS ||
+      MPI_Type_commit(&fof_cloud_final_mass_type) != MPI_SUCCESS) {
+    error("Failed to create MPI type for fof_cloud_final_mass.");
+  }
+#else
+  error("Calling an MPI function in non-MPI code.");
+#endif
 }
 
 #ifdef WITH_MPI
@@ -498,6 +549,44 @@ __attribute__((always_inline)) INLINE static double cell_min_dist_fof_cloud(
 
   return r2;
 }
+
+#ifdef WITH_MPI
+
+/* Add a group to the hash table.
+ * This is exactly the same as hashmap_add_group() in fof.c.
+ */
+__attribute__((always_inline)) INLINE static void hashmap_add_cloud_group(
+    const size_t group_id, const size_t group_offset, hashmap_t *map) {
+
+  int created_new_element = 0;
+  hashmap_value_t *offset =
+      hashmap_get_new(map, group_id, &created_new_element);
+
+  if (offset != NULL) {
+
+    /* If the element is a new entry set its value. */
+    if (created_new_element) {
+      (*offset).value_st = group_offset;
+    }
+  } else
+    error("Couldn't find key (%zu) or create new one.", group_id);
+}
+
+/* Find a group in the hash table
+ * This is exactly the same as hashmap_find_group_offset() in fof.c.
+ */
+__attribute__((always_inline)) INLINE static size_t hashmap_find_cloud_group_offset(
+    const size_t group_id, hashmap_t *map) {
+
+  hashmap_value_t *group_offset = hashmap_get(map, group_id);
+
+  if (group_offset == NULL)
+    error("Couldn't find key (%zu) or create new one.", group_id);
+
+  return (size_t)(*group_offset).value_st;
+}
+
+#endif /* WITH_MPI */
 
 /**
  * @brief Perform a FOF cloud search using union-find on a given leaf-cell
@@ -1588,7 +1677,251 @@ void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
                                       const struct space *s) {
 
 #ifdef WITH_MPI
-  printf("fof_cloud_link_foreign_fragments\n");
+  struct engine *e = s->e;
+  const int verbose = e->verbose;
+
+  /* Abort if only one node */
+  if (e->nr_nodes == 1) return;
+
+  const size_t nr_parts = s->nr_parts;
+  size_t *restrict group_index = props->group_index;
+  size_t *restrict group_size = props->group_size;
+
+  const ticks tic_total = getticks();
+  ticks tic = getticks();
+  const ticks comms_tic = getticks();
+
+  if (verbose)
+    message(
+        "Searching %zu hydro particles for cross-node links with l_x: %lf",
+        nr_parts, sqrt(props->l_x2));
+
+  /* Local copy of the variable set in the mapper */
+  const int group_link_count = props->group_link_count;
+
+  /* Sum the total number of links across MPI domains over each MPI rank. */
+  int global_group_link_count = 0;
+  MPI_Allreduce(&group_link_count, &global_group_link_count, 1, MPI_INT,
+                MPI_SUM, MPI_COMM_WORLD);
+
+  if (global_group_link_count < 0)
+    error("Overflow of the size of the global list of foreign links");
+
+  struct fof_cloud_mpi *global_group_links = NULL;
+  int *displ = NULL, *group_link_counts = NULL;
+
+  if (swift_memalign("fof_global_group_links", (void **)&global_group_links,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     global_group_link_count * sizeof(struct fof_cloud_mpi)) != 0)
+    error("Error while allocating memory for the global list of group links");
+
+  if (posix_memalign((void **)&group_link_counts, SWIFT_STRUCT_ALIGNMENT,
+                     e->nr_nodes * sizeof(int)) != 0)
+    error(
+        "Error while allocating memory for the number of group links on each "
+        "MPI rank");
+
+  if (posix_memalign((void **)&displ, SWIFT_STRUCT_ALIGNMENT,
+                     e->nr_nodes * sizeof(int)) != 0)
+    error(
+        "Error while allocating memory for the displacement in memory for the "
+        "global group link list");
+
+  /* Gather the total number of links on each rank. */
+  MPI_Allgather(&group_link_count, 1, MPI_INT, group_link_counts, 1, MPI_INT,
+                MPI_COMM_WORLD);
+
+  /* Set the displacements into the global link list using the link counts from
+   * each rank */
+  displ[0] = 0;
+  for (int i = 1; i < e->nr_nodes; i++) {
+    displ[i] = displ[i - 1] + group_link_counts[i - 1];
+    if (displ[i] < 0) error("Number of group links overflowing!");
+  }
+
+  /* Gather the global link list on all ranks. */
+  MPI_Allgatherv(props->group_links, group_link_count, fof_cloud_mpi_type,
+                 global_group_links, group_link_counts, displ, fof_cloud_mpi_type,
+                 MPI_COMM_WORLD);
+
+  /* Clean up memory. */
+  free(group_link_counts);
+  free(displ);
+  swift_free("fof_cloud_group_links", props->group_links);
+  props->group_links = NULL;
+
+  if (verbose) {
+    message("Communication took: %.3f %s.",
+            clocks_from_ticks(getticks() - comms_tic), clocks_getunit());
+
+    message("Global comms took: %.3f %s.", clocks_from_ticks(getticks() - tic),
+            clocks_getunit());
+  }
+
+  tic = getticks();
+
+  /* Transform the group IDs to a local list going from 0-group_count so a
+   * union-find can be performed.
+   * Each member of a link is stored separately --> Need 2x as many entries */
+  size_t *global_group_index = NULL, *global_group_id = NULL,
+         *global_group_size = NULL;
+  const int global_group_list_size = 2 * global_group_link_count;
+
+  if (swift_memalign("fof_global_group_index", (void **)&global_group_index,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     global_group_list_size * sizeof(size_t)) != 0)
+    error(
+        "Error while allocating memory for the displacement in memory for the "
+        "global group link list");
+
+  if (swift_memalign("fof_global_group_id", (void **)&global_group_id,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     global_group_list_size * sizeof(size_t)) != 0)
+    error(
+        "Error while allocating memory for the displacement in memory for the "
+        "global group link list");
+
+  if (swift_memalign("fof_global_group_size", (void **)&global_group_size,
+                     SWIFT_STRUCT_ALIGNMENT,
+                     global_group_list_size * sizeof(size_t)) != 0)
+    error(
+        "Error while allocating memory for the displacement in memory for the "
+        "global group link list");
+
+  bzero(global_group_size, global_group_list_size * sizeof(size_t));
+
+  /* Create hash table. */
+  hashmap_t map;
+  hashmap_init(&map);
+
+  /* Store each group ID and its properties. */
+  int group_count = 0;
+  for (int k = 0; k < global_group_link_count; k++) {
+
+    const size_t group_i = global_group_links[k].group_i;
+    const size_t group_j = global_group_links[k].group_j;
+
+    global_group_size[group_count] += global_group_links[k].group_i_size;
+    global_group_id[group_count] = group_i;
+    hashmap_add_cloud_group(group_i, group_count, &map);
+    group_count++;
+
+    global_group_size[group_count] += global_group_links[k].group_j_size;
+    global_group_id[group_count] = group_j;
+    hashmap_add_cloud_group(group_j, group_count, &map);
+    group_count++;
+  }
+
+  if (verbose)
+    message("Global list compression took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Create a global_group_index list of groups across MPI domains so that you
+   * can perform a union-find locally on each node.
+   * The value of which is an offset into global_group_id, which is the actual
+   * root. */
+  for (int i = 0; i < group_count; i++) global_group_index[i] = i;
+
+  /* Store the original group size before incrementing in the Union-Find. */
+  size_t *orig_global_group_size = NULL;
+
+  if (swift_memalign("fof_orig_global_group_size",
+                     (void **)&orig_global_group_size, SWIFT_STRUCT_ALIGNMENT,
+                     group_count * sizeof(size_t)) != 0)
+    error(
+        "Error while allocating memory for the displacement in memory for the "
+        "global group link list");
+
+  memcpy(orig_global_group_size, global_group_size,
+         group_count * sizeof(size_t));
+
+  /* Perform a union-find on the group links. */
+  for (int k = 0; k < global_group_link_count; k++) {
+
+    /* Use the hash table to find the group offsets in the index array */
+    const size_t find_i =
+        hashmap_find_cloud_group_offset(global_group_links[k].group_i, &map);
+    const size_t find_j =
+        hashmap_find_cloud_group_offset(global_group_links[k].group_j, &map);
+
+    /* Use the offset to find the group's root. */
+    const size_t root_i = fof_cloud_find(find_i, global_group_index);
+    const size_t root_j = fof_cloud_find(find_j, global_group_index);
+
+    const size_t group_i = global_group_id[root_i];
+    const size_t group_j = global_group_id[root_j];
+
+    if (group_i == group_j) continue;
+
+    /* Update roots accordingly */
+    const size_t size_i = global_group_size[root_i];
+    const size_t size_j = global_group_size[root_j];
+#ifdef UNION_BY_SIZE_OVER_MPI
+    if (size_i < size_j) {
+      global_group_index[root_i] = root_j;
+      global_group_size[root_j] += size_i;
+    } else {
+      global_group_index[root_j] = root_i;
+      global_group_size[root_i] += size_j;
+    }
+#else
+    if (group_j < group_i) {
+      global_group_index[root_i] = root_j;
+      global_group_size[root_j] += size_i;
+    } else {
+      global_group_index[root_j] = root_i;
+      global_group_size[root_i] += size_j;
+    }
+#endif
+  }
+
+  hashmap_free(&map);
+
+  if (verbose)
+    message("global_group_index construction took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  tic = getticks();
+
+  /* Update each group locally with new root information */
+  for (int i = 0; i < group_count; i++) {
+
+    const size_t group_id = global_group_id[i];
+    const size_t offset = fof_cloud_find(global_group_index[i], global_group_index);
+    const size_t new_root = global_group_id[offset];
+
+    /* If the group is local update its root and size */
+    if (is_local_fof_cloud(group_id, nr_parts) && new_root != group_id) {
+
+      group_index[group_id - node_offset_cloud] = new_root;
+      group_size[group_id - node_offset_cloud] -= orig_global_group_size[i];
+    }
+
+    /* If the group linked to a local root update its size */
+    if (is_local_fof_cloud(new_root, nr_parts) && new_root != group_id) {
+
+      /* Use group sizes before Union-Find */
+      group_size[new_root - node_offset_cloud] += orig_global_group_size[i];
+    }
+  }
+
+  if (verbose)
+    message("Updating groups locally took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  /* Clean up memory. */
+  swift_free("fof_global_group_links", global_group_links);
+  swift_free("fof_global_group_index", global_group_index);
+  swift_free("fof_global_group_size", global_group_size);
+  swift_free("fof_global_group_id", global_group_id);
+  swift_free("fof_orig_global_group_size", orig_global_group_size);
+
+  if (verbose) {
+    message("link_foreign_fragmens() took (FOF_CLOUD SCALING): %.3f %s.",
+            clocks_from_ticks(getticks() - tic_total), clocks_getunit());
+  }
 
 #endif /* WITH_MPI */
 }

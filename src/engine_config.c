@@ -37,6 +37,7 @@
 
 /* Local headers. */
 #include "fof.h"
+#include "fof_cloud.h"
 #include "line_of_sight.h"
 #include "mpiuse.h"
 #include "part.h"
@@ -867,6 +868,9 @@ void engine_config(int restart, int fof, struct engine *e,
 #ifdef WITH_FOF
   fof_create_mpi_types();
 #endif /* WITH_FOF */
+#ifdef WITH_FOF_CLOUD
+  fof_cloud_create_mpi_types();
+#endif /* WITH_FOF_CLOUD */
 #endif /* WITH_MPI */
 
   if (!fof) {
