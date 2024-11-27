@@ -4677,8 +4677,8 @@ void engine_make_fof_cloud_loop_tasks_mapper(void *map_data, int num_elements,
     /* Skip cells without hydro particles */
     if (ci->hydro.count == 0) continue;
 
-    /* Skip cells without gravity particles */
-    if (ci->grav.count == 0) continue;
+    // /* Skip cells without gravity particles */
+    // if (ci->grav.count == 0) continue;
 
     /* If the cells is local build a self-interaction */
     if (ci->nodeID == nodeID)
@@ -4703,7 +4703,8 @@ void engine_make_fof_cloud_loop_tasks_mapper(void *map_data, int num_elements,
           struct cell *cj = &cells[cjd];
 
           /* Does that neighbour have particles? */
-          if (cid >= cjd || cj->hydro.count == 0 || cj->grav.count == 0)
+          // if (cid >= cjd || cj->hydro.count == 0 || cj->grav.count == 0)
+          if (cid >= cjd || cj->hydro.count == 0)
             continue;
 
           /* Construct the pair search task only for fully local pairs */

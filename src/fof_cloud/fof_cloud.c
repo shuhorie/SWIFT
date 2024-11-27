@@ -244,18 +244,18 @@ void fof_cloud_allocate(const struct space *s, struct fof_cloud_props *props) {
 
   /* Allocate and initialise a group index array. */
   if (swift_memalign("fof_group_index", (void **)&props->group_index, 64,
-                     s->nr_gparts * sizeof(size_t)) != 0)
+                     s->nr_parts * sizeof(size_t)) != 0)
     error("Failed to allocate list of particle group indices for FoF cloud search.");
 
   /* Allocate and initialise the closest distance array. */
   if (swift_memalign("fof_distance", (void **)&props->distance_to_link, 64,
-                     s->nr_gparts * sizeof(float)) != 0)
+                     s->nr_parts * sizeof(float)) != 0)
     error(
         "Failed to allocate list of particle distances array for FoF cloud search.");
 
   /* Allocate and initialise a group size array. */
   if (swift_memalign("fof_group_size", (void **)&props->group_size, 64,
-                     s->nr_gparts * sizeof(size_t)) != 0)
+                     s->nr_parts * sizeof(size_t)) != 0)
     error("Failed to allocate list of group size for FoF cloud search.");
 
   ticks tic = getticks();
@@ -1487,7 +1487,7 @@ void fof_calc_cloud_group_size_mapper(void *map_data, int num_elements,
   size_t *restrict group_index = s->e->fof_cloud_properties->group_index;
   size_t *restrict group_size = s->e->fof_cloud_properties->group_size;
 
-  /* Offset into gparts array. */
+  /* Offset into parts array. */
   const ptrdiff_t parts_offset = (ptrdiff_t)(parts - s->parts);
   size_t *const group_index_offset = group_index + parts_offset;
 
