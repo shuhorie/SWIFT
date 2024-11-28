@@ -209,9 +209,46 @@ __attribute__((always_inline)) INLINE static size_t fof_cloud_find_global(
   error("Calling MPI function in non-MPI mode");
   return -1;
 #endif
-
 }
+
 #endif /* WITH_MPI */
+
+/**
+ * @brief   Finds the local root ID of the group a particle exists in
+ * when group_index contains globally unique identifiers -
+ * i.e. we stop *before* we advance to a foreign root.
+ *
+ * This is almost the same as fof_find_local() in fof.c.
+ *
+ * Here we assume that the input i is a local index and we
+ * return the local index of the root.
+ *
+ * @param i Index of the particle.
+ * @param nr_parts The number of hydro-particles on this node.
+ * @param group_index Array of group root indices.
+ */
+__attribute__((always_inline)) INLINE static size_t fof_cloud_find_local(
+    const size_t i, const size_t nr_parts, const size_t *group_index) {
+#ifdef WITH_MPI
+  size_t root = node_offset_cloud + i;
+
+  while ((group_index[root - node_offset_cloud] != root) &&
+         (group_index[root - node_offset_cloud] >= node_offset_cloud) &&
+         (group_index[root - node_offset_cloud] < node_offset_cloud + nr_parts)) {
+    root = group_index[root - node_offset_cloud];
+  }
+
+  return root - node_offset_cloud;
+#else
+  size_t root = i;
+
+  while ((group_index[root] != root) && (group_index[root] < nr_parts)) {
+    root = group_index[root];
+  }
+
+  return root;
+#endif
+}
 
 /**
  * @brief Mapper function to set the initial group indices.
@@ -230,7 +267,7 @@ void fof_cloud_set_initial_group_index_mapper(void *map_data, int num_elements,
 
   const ptrdiff_t offset = group_index - group_index_start;
 
-  for (int i = 0; i < num_elements; ++i) {
+  for (int i = 0; i < num_elements; i++) {
     group_index[i] = i + offset;
   }
 }
@@ -250,7 +287,7 @@ void fof_cloud_set_initial_part_distances_mapper(void *map_data,
                                                  void *extra_data) {
 
   float *distance = (float *)map_data;
-  for (int i = 0; i < num_elements; ++i) {
+  for (int i = 0; i < num_elements; i++) {
     distance[i] = FLT_MAX;
   }
 }
@@ -269,8 +306,30 @@ void fof_cloud_set_initial_group_size_mapper(void *map_data, int num_elements,
                                              void *extra_data) {
 
   size_t *group_size = (size_t *)map_data;
-  for (int i = 0; i < num_elements; ++i) {
+  for (int i = 0; i < num_elements; i++) {
     group_size[i] = 1;
+  }
+}
+
+/**
+ * @brief Mapper function to set the initial group IDs.
+ *
+ * This is almost the same as fof_set_initial_group_id_mappe()
+ * in fof.c.
+ *
+ * @param map_data The array of #part%s.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to the default group ID.
+ */
+void fof_cloud_set_initial_group_id_mapper(void *map_data, int num_elements,
+                                           void *extra_data) {
+
+  /* Unpack the information */
+  struct part *parts = (struct part *)map_data;
+  const size_t group_id_default = *((size_t *)extra_data);
+
+  for (int i = 0; i < num_elements; ++i) {
+    parts[i].fof_cloud_data.group_id = group_id_default;
   }
 }
 
@@ -294,18 +353,18 @@ void fof_cloud_allocate(const struct space *s, struct fof_cloud_props *props) {
 #endif
 
   /* Allocate and initialise a group index array. */
-  if (swift_memalign("fof_group_index", (void **)&props->group_index, 64,
+  if (swift_memalign("fof_cloud_group_index", (void **)&props->group_index, 64,
                      s->nr_parts * sizeof(size_t)) != 0)
     error("Failed to allocate list of particle group indices for FoF cloud search.");
 
   /* Allocate and initialise the closest distance array. */
-  if (swift_memalign("fof_distance", (void **)&props->distance_to_link, 64,
+  if (swift_memalign("fof_cloud_distance", (void **)&props->distance_to_link, 64,
                      s->nr_parts * sizeof(float)) != 0)
     error(
         "Failed to allocate list of particle distances array for FoF cloud search.");
 
   /* Allocate and initialise a group size array. */
-  if (swift_memalign("fof_group_size", (void **)&props->group_size, 64,
+  if (swift_memalign("fof_cloud_group_size", (void **)&props->group_size, 64,
                      s->nr_parts * sizeof(size_t)) != 0)
     error("Failed to allocate list of group size for FoF cloud search.");
 
@@ -350,6 +409,52 @@ void fof_cloud_allocate(const struct space *s, struct fof_cloud_props *props) {
     message("took %.3f %s.", clocks_from_ticks(getticks() - total_tic),
             clocks_getunit());
 }
+
+/**
+ * @brief Comparison function for qsort call comparing group sizes.
+ *
+ * This is almost the same as cmp_func_group_size() in fof.c
+ *
+ * @param a The first #cloud_group_length object.
+ * @param b The second #cloud_group_length object.
+ * @return 1 if the size of the group b is larger than the size of group a, -1
+ * if a is the largest and 0 if they are equal.
+ */
+int cmp_func_cloud_group_size(const void *a, const void *b) {
+  struct cloud_group_length *a_group_size = (struct cloud_group_length *)a;
+  struct cloud_group_length *b_group_size = (struct cloud_group_length *)b;
+  if (b_group_size->size > a_group_size->size)
+    return 1;
+  else if (b_group_size->size < a_group_size->size)
+    return -1;
+  else
+    return 0;
+}
+
+#ifdef WITH_MPI
+
+/**
+ * @brief Comparison function for qsort call comparing group global roots.
+ *
+ * This is almost the same as compare_fof_final_index_global_root() in fof.c
+ *
+ * @param a The first #fof_final_index object.
+ * @param b The second #fof_final_index object.
+ * @return 1 if the global of the group b is *smaller* than the global group of
+ * group a, -1 if a is the smaller one and 0 if they are equal.
+ */
+int compare_fof_cloud_final_index_global_root(const void *a, const void *b) {
+  struct fof_cloud_final_index *fof_final_index_a = (struct fof_cloud_final_index *)a;
+  struct fof_cloud_final_index *fof_final_index_b = (struct fof_cloud_final_index *)b;
+  if (fof_final_index_b->global_root < fof_final_index_a->global_root)
+    return 1;
+  else if (fof_final_index_b->global_root > fof_final_index_a->global_root)
+    return -1;
+  else
+    return 0;
+}
+
+#endif
 
 /**
  * @brief Finds the local root ID of the group a particle exists in.
@@ -572,7 +677,7 @@ __attribute__((always_inline)) INLINE static void hashmap_add_cloud_group(
     error("Couldn't find key (%zu) or create new one.", group_id);
 }
 
-/* Find a group in the hash table
+/* Find a group in the hash table.
  * This is exactly the same as hashmap_find_group_offset() in fof.c.
  */
 __attribute__((always_inline)) INLINE static size_t hashmap_find_cloud_group_offset(
@@ -584,6 +689,35 @@ __attribute__((always_inline)) INLINE static size_t hashmap_find_cloud_group_off
     error("Couldn't find key (%zu) or create new one.", group_id);
 
   return (size_t)(*group_offset).value_st;
+}
+
+/* Compute send/recv offsets for MPI communication.
+ * This is exactly the same as fof_compute_send_recv_offsets() in fof.c.
+ */
+__attribute__((always_inline)) INLINE static void fof_cloud_compute_send_recv_offsets(
+    const int nr_nodes, int *sendcount, int **recvcount, int **sendoffset,
+    int **recvoffset, size_t *nrecv) {
+
+  /* Determine number of entries to receive */
+  *recvcount = (int *)malloc(nr_nodes * sizeof(int));
+  MPI_Alltoall(sendcount, 1, MPI_INT, *recvcount, 1, MPI_INT, MPI_COMM_WORLD);
+
+  /* Compute send/recv offsets */
+  *sendoffset = (int *)malloc(nr_nodes * sizeof(int));
+
+  (*sendoffset)[0] = 0;
+  for (int i = 1; i < nr_nodes; i++)
+    (*sendoffset)[i] = (*sendoffset)[i - 1] + sendcount[i - 1];
+
+  *recvoffset = (int *)malloc(nr_nodes * sizeof(int));
+
+  (*recvoffset)[0] = 0;
+  for (int i = 1; i < nr_nodes; i++)
+    (*recvoffset)[i] = (*recvoffset)[i - 1] + (*recvcount)[i - 1];
+
+  /* Allocate receive buffer */
+  *nrecv = 0;
+  for (int i = 0; i < nr_nodes; i++) (*nrecv) += (*recvcount)[i];
 }
 
 #endif /* WITH_MPI */
@@ -1153,6 +1287,20 @@ void rec_fof_cloud_search_pair_foreign(
 #endif
 
 /**
+ * @brief Calculates the total mass and CoM of each group above min_group_size
+ * and finds the densest particle.
+ */
+void fof_cloud_calc_group_mass(struct fof_cloud_props *props, const struct space *s,
+                               const size_t num_groups_local,
+                               const size_t num_groups_prev,
+                               size_t *restrict num_on_node,
+                               size_t *restrict first_on_node,
+                               double *restrict group_mass) {
+
+  printf("fof_cloud_calc_group_mass()\n");
+}
+
+/**
  * @brief Mapper function to perform FOF search.
  *
  * @param map_data An array of #cell pair indices.
@@ -1263,6 +1411,17 @@ void fof_cloud_find_foreign_links_mapper(void *map_data, int num_elements,
 
   swift_free("fof_local_group_links", local_group_links);
 #endif /* WITH_MPI */
+}
+
+/*
+ *
+ */
+void fof_cloud_finalise_group_data(struct fof_cloud_props *props,
+                                   const struct cloud_group_length *group_sizes,
+                                   const struct part *parts, const int periodic,
+                                   const double dim[3], const int num_groups) {
+
+  printf("fof_cloud_finalise_group_data()\n");
 }
 
 struct mapper_data_fof_cloud {
@@ -1710,7 +1869,7 @@ void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
   struct fof_cloud_mpi *global_group_links = NULL;
   int *displ = NULL, *group_link_counts = NULL;
 
-  if (swift_memalign("fof_global_group_links", (void **)&global_group_links,
+  if (swift_memalign("fof_cloud_global_group_links", (void **)&global_group_links,
                      SWIFT_STRUCT_ALIGNMENT,
                      global_group_link_count * sizeof(struct fof_cloud_mpi)) != 0)
     error("Error while allocating memory for the global list of group links");
@@ -1767,21 +1926,21 @@ void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
          *global_group_size = NULL;
   const int global_group_list_size = 2 * global_group_link_count;
 
-  if (swift_memalign("fof_global_group_index", (void **)&global_group_index,
+  if (swift_memalign("fof_cloud_global_group_index", (void **)&global_group_index,
                      SWIFT_STRUCT_ALIGNMENT,
                      global_group_list_size * sizeof(size_t)) != 0)
     error(
         "Error while allocating memory for the displacement in memory for the "
         "global group link list");
 
-  if (swift_memalign("fof_global_group_id", (void **)&global_group_id,
+  if (swift_memalign("fof_cloud_global_group_id", (void **)&global_group_id,
                      SWIFT_STRUCT_ALIGNMENT,
                      global_group_list_size * sizeof(size_t)) != 0)
     error(
         "Error while allocating memory for the displacement in memory for the "
         "global group link list");
 
-  if (swift_memalign("fof_global_group_size", (void **)&global_group_size,
+  if (swift_memalign("fof_cloud_global_group_size", (void **)&global_group_size,
                      SWIFT_STRUCT_ALIGNMENT,
                      global_group_list_size * sizeof(size_t)) != 0)
     error(
@@ -1827,7 +1986,7 @@ void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
   /* Store the original group size before incrementing in the Union-Find. */
   size_t *orig_global_group_size = NULL;
 
-  if (swift_memalign("fof_orig_global_group_size",
+  if (swift_memalign("fof_cloud_orig_global_group_size",
                      (void **)&orig_global_group_size, SWIFT_STRUCT_ALIGNMENT,
                      group_count * sizeof(size_t)) != 0)
     error(
@@ -1912,11 +2071,11 @@ void fof_cloud_link_foreign_fragments(struct fof_cloud_props *props,
             clocks_from_ticks(getticks() - tic), clocks_getunit());
 
   /* Clean up memory. */
-  swift_free("fof_global_group_links", global_group_links);
-  swift_free("fof_global_group_index", global_group_index);
-  swift_free("fof_global_group_size", global_group_size);
-  swift_free("fof_global_group_id", global_group_id);
-  swift_free("fof_orig_global_group_size", orig_global_group_size);
+  swift_free("fof_cloud_global_group_links", global_group_links);
+  swift_free("fof_cloud_global_group_index", global_group_index);
+  swift_free("fof_cloud_global_group_size", global_group_size);
+  swift_free("fof_cloud_global_group_id", global_group_id);
+  swift_free("fof_cloud_orig_global_group_size", orig_global_group_size);
 
   if (verbose) {
     message("link_foreign_fragmens() took (FOF_CLOUD SCALING): %.3f %s.",
@@ -1939,12 +2098,373 @@ void fof_cloud_compute_group_props(struct fof_cloud_props *props,
                                    const struct cosmology *cosmo,
                                    struct space *s) {
 
-//   const int verbose = s->e->verbose;
-  printf("fof_cloud_group_props\n");
+  const int verbose = s->e->verbose;
+#ifdef WITH_MPI
+  const int nr_nodes = s->e->nr_nodes;
+#endif
+  const ticks tic_total = getticks();
 
-  swift_free("fof_group_index", props->group_index);
-  swift_free("fof_distance", props->distance_to_link);
-  swift_free("fof_group_size", props->group_size);
+  struct part *parts = s->parts;
+  const size_t nr_parts = s->nr_parts;
+
+  const size_t min_group_size = props->min_group_size;
+  const size_t group_id_offset = props->group_id_offset;
+  const size_t group_id_default = props->group_id_default;
+
+  size_t num_groups_local = 0;
+  size_t num_parts_in_groups_local = 0;
+  size_t max_group_size_local = 0;
+
+  /* Local copy of the arrays */
+  size_t *restrict group_index = props->group_index;
+  size_t *restrict group_size = props->group_size;
+
+  const ticks tic_num_groups_calc = getticks();
+
+  for (size_t i = 0; i < nr_parts; i++) {
+
+#ifdef WITH_MPI
+    /* Find the total number of groups */
+    if (group_index[i] == i + node_offset_cloud && group_size[i] >= min_group_size)
+      num_groups_local++;
+#else
+    /* Find the total number of groups */
+    if (group_index[i] == i && group_size[i] >= min_group_size)
+      num_groups_local++;
+#endif
+
+    /* Find the total number of particles in groups */
+    if (group_size[i] >= min_group_size)
+      num_parts_in_groups_local += group_size[i];
+
+    /* Find the largest group */
+    if  (group_size[i] > max_group_size_local)
+      max_group_size_local = group_size[i];
+  }
+
+  if (verbose)
+    message(
+        "Calculating the total no. of local groups took: (FOF_CLOUD SCALING): %.3f "
+        "%s.",
+        clocks_from_ticks(getticks() - tic_num_groups_calc), clocks_getunit());
+
+  /* Sort the groups in descending order based upon size and re-label their
+   * IDs 0-num_groups. */
+  struct cloud_group_length *high_group_sizes = NULL;
+  int group_count = 0;
+  if (swift_memalign("fof_cloud_high_group_sizes", (void **)&high_group_sizes, 32,
+                     num_groups_local * sizeof(struct cloud_group_length)) != 0)
+    error("Failed to allocate list of large groups for cloud.");
+
+  /* Store the group_sizes and their offset. */
+  for (size_t i = 0; i < nr_parts; i++) {
+
+#ifdef WITH_MPI
+    if (group_index[i] == i + node_offset_cloud && group_size[i] >= min_group_size) {
+      high_group_sizes[group_count].index = node_offset_cloud + i;
+      high_group_sizes[group_count++].size = group_size[i];
+    }
+#else
+    if (group_index[i] == i && group_size[i] >= min_group_size) {
+      high_group_sizes[group_count].index = i;
+      high_group_sizes[group_count++].size = group_size[i];
+    }
+#endif
+  }
+
+  ticks tic = getticks();
+
+  /* Find global properties. */
+  long long num_groups = 0, num_parts_in_groups = 0, max_group_size = 0;
+#ifdef WITH_MPI
+  MPI_Allreduce(&num_groups_local, &num_groups, 1, MPI_LONG_LONG_INT, MPI_SUM,
+                MPI_COMM_WORLD);
+
+  if (verbose)
+    message("Finding the total no. of groups took: (FOF_CLOUD SCALING): %.3f %s.",
+            clocks_from_ticks(getticks() - tic_num_groups_calc),
+            clocks_getunit());
+
+  MPI_Reduce(&num_parts_in_groups_local, &num_parts_in_groups, 1,
+             MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+  MPI_Reduce(&max_group_size_local, &max_group_size, 1, MPI_LONG_LONG_INT,
+             MPI_MAX, 0, MPI_COMM_WORLD);
+#else
+  num_groups = num_groups_local;
+
+  num_parts_in_groups = num_parts_in_groups_local;
+  max_group_size = max_group_size_local;
+#endif /* WITH_MPI */
+  props->num_groups = num_groups;
+
+  /* Find number of groups on lower numbered MPI ranks */
+#ifdef WITH_MPI
+  long long nglocal = num_groups_local;
+  long long ngsum;
+  MPI_Scan(&nglocal, &ngsum, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+  const size_t num_groups_prev = (size_t)(ngsum - nglocal);
+#endif /* WITH_MPI */
+
+  if (verbose)
+    message("Finding the total no. of groups took: (FOF_CLOUD SCALING): %.3f %s.",
+            clocks_from_ticks(getticks() - tic_num_groups_calc),
+            clocks_getunit());
+
+  /* Sort local groups into descending order of size */
+  qsort(high_group_sizes, num_groups_local, sizeof(struct cloud_group_length),
+        cmp_func_cloud_group_size);
+
+  tic = getticks();
+
+  /* Set default group ID for all particles */
+  threadpool_map(&s->e->threadpool, fof_cloud_set_initial_group_id_mapper, s->parts,
+                 s->nr_parts, sizeof(struct part), threadpool_auto_chunk_size,
+                 (void *)&group_id_default);
+
+  if (verbose)
+    message("Setting default group ID took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic), clocks_getunit());
+
+  /* Assign final group IDs to local root particles where the global root is
+   * on this node and the group is large enough. Within a node IDs are
+   * assigned in descending order of particle number. */
+  for (size_t i = 0; i < num_groups_local; i++) {
+#ifdef WITH_MPI
+    parts[high_group_sizes[i].index - node_offset_cloud].fof_cloud_data.group_id =
+        group_id_offset + i + num_groups_prev;
+#else
+    parts[high_group_sizes[i].index].fof_cloud_data.group_id = group_id_offset + i;
+#endif
+  }
+
+#ifdef WITH_MPI
+
+  /* Now, for each local root where the global root is on some other node
+   * AND the total size of the group is >= min_group_size we need to
+   * retrieve the parts.group_id we just assigned to the global root.
+   *
+   * Will do that by sending the group_index of these lcoal roots to the
+   * node where their global root is stored and receiving back the new
+   * group_id associated with that particle.
+   *
+   * Identify local roots with global root on another node and large enough
+   * group_size. Store index of the local and global roots in these cases.
+   *
+   * NOTE: if group_size only contains the total FoF mass for global roots,
+   * then we have to communicate ALL fragments where the global root is not
+   * on this node. Hence the commented out extra conditions below.*/
+  size_t nsend = 0;
+  for (size_t i = 0; i < nr_parts; i++) {
+    if ((!is_local_fof_cloud(group_index[i],
+                             nr_parts))) { /* && (group_size[i] >= min_group_size)) { */
+      nsend++;
+    }
+  }
+
+  struct fof_cloud_final_index *fof_cloud_index_send =
+      (struct fof_cloud_final_index *)swift_malloc(
+          "fof_cloud_index_send", sizeof(struct fof_cloud_final_index) * nsend);
+  nsend = 0;
+  for (size_t i = 0; i < nr_parts; i++) {
+    if ((!is_local_fof_cloud(group_index[i],
+                             nr_parts))) { /* && (group_size[i] >= min_group_size)) { */
+      fof_cloud_index_send[nsend].local_root = node_offset_cloud + i;
+      fof_cloud_index_send[nsend].global_root = group_index[i];
+      nsend++;
+    }
+  }
+
+  /* Sort by global root - this puts the groups in order of which node they're
+   * stored on */
+  qsort(fof_cloud_index_send, nsend, sizeof(struct fof_cloud_final_index),
+        compare_fof_cloud_final_index_global_root);
+
+  /* Determine range of global indexes (i.e. particles) on each node */
+  size_t *num_on_node = (size_t *)malloc(nr_nodes * sizeof(size_t));
+  MPI_Allgather(&nr_parts, sizeof(size_t), MPI_BYTE, num_on_node,
+                sizeof(size_t), MPI_BYTE, MPI_COMM_WORLD);
+  size_t *first_on_node = (size_t *)malloc(nr_nodes * sizeof(size_t));
+  first_on_node[0] = 0;
+  for (int i = 1; i < nr_nodes; i++)
+    first_on_node[i] = first_on_node[i - 1] + num_on_node[i - 1];
+
+  /* Determine how many entries go to each node */
+  int *sendcount = (int *)malloc(nr_nodes * sizeof(int));
+  for (int i = 0; i < nr_nodes; i++) sendcount[i] = 0;
+  int dest = 0;
+  for (size_t i = 0; i < nsend; i++) {
+    while ((fof_cloud_index_send[i].global_root >=
+            first_on_node[dest] + num_on_node[dest]) ||
+           (num_on_node[dest] == 0)) {
+      dest++;
+    }
+    if (dest >= nr_nodes) error("Node index out of range!");
+    sendcount[dest]++;
+  }
+
+  int *recvcount = NULL, *sendoffset = NULL, *recvoffset = NULL;
+  size_t nrecv = 0;
+
+  fof_cloud_compute_send_recv_offsets(nr_nodes, sendcount, &recvcount, &sendoffset,
+                                      &recvoffset, &nrecv);
+
+  struct fof_cloud_final_index * fof_cloud_index_recv =
+      (struct fof_cloud_final_index *)swift_malloc(
+          "fof_cloud_index_recv", nrecv * sizeof(struct fof_cloud_final_index));
+
+  /* Exchange group indexes */
+  MPI_Alltoallv(fof_cloud_index_send, sendcount, sendoffset, fof_cloud_final_index_type,
+                fof_cloud_index_recv, recvcount, recvoffset, fof_cloud_final_index_type,
+                MPI_COMM_WORLD);
+
+  /* For each received global root, look up the group ID we assigned and store
+   * it in the struct */
+  for (size_t i = 0; i < nrecv; i++) {
+    if ((fof_cloud_index_recv[i].global_root < node_offset_cloud) ||
+        (fof_cloud_index_recv[i].global_root >= node_offset_cloud + nr_parts)) {
+      error("Recieved global root index out of range!");
+    }
+    fof_cloud_index_recv[i].global_root =
+        parts[fof_cloud_index_recv[i].global_root - node_offset_cloud].fof_cloud_data.group_id;
+  }
+
+  /* Send the result back */
+  MPI_Alltoallv(fof_cloud_index_recv, recvcount, recvoffset, fof_cloud_final_index_type,
+                fof_cloud_index_send, sendcount, sendoffset, fof_cloud_final_index_type,
+                MPI_COMM_WORLD);
+
+  /* Update local parts.group_id */
+  for (size_t i = 0; i < nsend; i++) {
+    if ((fof_cloud_index_send[i].local_root < node_offset_cloud) ||
+        (fof_cloud_index_send[i].local_root >= node_offset_cloud + nr_parts)) {
+      error("Sent local root index out of range!");
+    }
+    parts[fof_cloud_index_send[i].local_root - node_offset_cloud].fof_cloud_data.group_id =
+        fof_cloud_index_send[i].global_root;
+  }
+
+  free(sendcount);
+  free(recvcount);
+  free(sendoffset);
+  free(recvoffset);
+  swift_free("fof_cloud_index_send", fof_cloud_index_send);
+  swift_free("fof_cloud_index_recv", fof_cloud_index_recv);
+
+#endif /* WITH_MPI */
+
+  /* Assign every particle the group_id of its local root. */
+  for (size_t i = 0; i < nr_parts; i++) {
+    const size_t root = fof_cloud_find_local(i, nr_parts, group_index);
+    parts[i].fof_cloud_data.group_id = parts[root].fof_cloud_data.group_id;
+  }
+
+  if (verbose)
+    message("Group sorting took: %.3f %s.", clocks_from_ticks(getticks() - tic),
+            clocks_getunit());
+
+  /* Allocate and initialise a group mass and centre of mass array. */
+  if (swift_memalign("fof_cloud_group_mass", (void **)&props->group_mass, 32,
+                     num_groups_local * sizeof(double)) != 0)
+    error("Failed to allocate list of group masses for FOF cloud search.");
+
+  if (swift_memalign("fof_cloud_group_size", (void **)&props->final_group_size, 32,
+                     num_groups_local * sizeof(long long)) != 0)
+    error("Failed to allocate list of group masses for FOF cloud search.");
+
+  if (swift_memalign("fof_cloud_group_centre_of_mass",
+                     (void **)&props->group_centre_of_mass, 32,
+                     num_groups_local * 3 * sizeof(double)) != 0)
+    error("Failed to allocate list of group CoM for FOF cloud search.");
+
+  if (swift_memalign("fof_cloud_group_first_position",
+                     (void **)&props->group_first_position, 32,
+                     num_groups_local * 3 * sizeof(double)) != 0)
+    error("Failed to allocate list of group first positions for FOF cloud search.");
+
+  bzero(props->group_mass, num_groups_local * sizeof(double));
+  bzero(props->final_group_size, num_groups_local * sizeof(long long));
+  bzero(props->group_centre_of_mass, num_groups_local * 3 * sizeof(double));
+
+  for (size_t i = 0; i < 3 * num_groups_local; i++) {
+    props->group_first_position[i] = -FLT_MAX;
+  }
+
+  /* Allocate and initialise arrays to identify the densest gas particle. */
+  if (swift_memalign("fof_cloud_max_part_density_index",
+                     (void **)&props->max_part_density_index, 32,
+                     num_groups_local * sizeof(long long)) != 0)
+    error(
+        "Failed to allocate list of max group density indices for FOF cloud "
+        "search.");
+
+  if (swift_memalign("fof_max_part_density", (void **)&props->max_part_density,
+                     32, num_groups_local * sizeof(float)) != 0)
+    error("Failed to allocate list of max group densities for FOF cloud search.");
+
+  /* No densest particle found so far */
+  bzero(props->max_part_density, num_groups_local * sizeof(float));
+
+  for (size_t i = 0; i < num_groups_local; i++) {
+    props->max_part_density_index[i] = -1LL;
+  }
+
+  const ticks tic_calc_props = getticks();
+
+#ifdef WITH_MPI
+  fof_cloud_calc_group_mass(props, s, num_groups_local, num_groups_prev,
+                            num_on_node, first_on_node, props->group_mass);
+  free(num_on_node);
+  free(first_on_node);
+#else
+  fof_cloud_calc_group_mass(props, s, num_groups_local, /*num_groups_prev=*/0,
+                            /*num_on_node=*/NULL, /*first_on_node=*/NULL, props->group_mass);
+#endif
+
+  /* Finalise the group data before dump */
+  fof_cloud_finalise_group_data(props, high_group_sizes, s->parts, s->periodic,
+                                s->dim, num_groups_local);
+
+  if (verbose)
+    message("Computing group properties took: %.3f %s.",
+            clocks_from_ticks(getticks() - tic_calc_props), clocks_getunit());
+
+  /* Free the left-overs */
+  swift_free("fof_cloud_high_group_sizes", high_group_sizes);
+  swift_free("fof_cloud_group_mass", props->group_mass);
+  swift_free("fof_cloud_group_size", props->final_group_size);
+  swift_free("fof_cloud_group_centre_of_mass", props->group_centre_of_mass);
+  swift_free("fof_cloud_group_first_position", props->group_first_position);
+  swift_free("fof_cloud_max_part_density_index", props->max_part_density_index);
+  swift_free("fof_cloud_max_part_density", props->max_part_density);
+  props->group_mass = NULL;
+  props->final_group_size = NULL;
+  props->group_centre_of_mass = NULL;
+  props->max_part_density_index = NULL;
+  props->max_part_density = NULL;
+
+  swift_free("fof_cloud_group_index", props->group_index);
+  swift_free("fof_cloud_distance", props->distance_to_link);
+  swift_free("fof_cloud_group_size", props->group_size);
+  props->group_index = NULL;
+  props->group_size = NULL;
+
+  if (engine_rank == 0) {
+    message(
+        "No. of groups: %lld. No. of particles in groups: %lld. No. of "
+        "particles not in groups: %lld.",
+        num_groups, num_parts_in_groups,
+        s->e->total_nr_parts - num_parts_in_groups);
+
+    message("Largest group by size: %lld", max_group_size);
+  }
+  if (verbose)
+    message("took %.3f %s.", clocks_from_ticks(getticks() - tic_total),
+            clocks_getunit());
+
+#ifdef WITH_MPI
+  MPI_Barrier(MPI_COMM_WORLD);
+#endif
+
 }
 
 #endif /* WITH_FOF_CLOUD */
