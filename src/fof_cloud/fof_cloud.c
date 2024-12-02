@@ -1421,7 +1421,51 @@ void fof_cloud_finalise_group_data(struct fof_cloud_props *props,
                                    const struct part *parts, const int periodic,
                                    const double dim[3], const int num_groups) {
 
-  printf("fof_cloud_finalise_group_data()\n");
+  size_t *group_size =
+      (size_t *)swift_malloc("fof_cloud_group_size", num_groups * sizeof(size_t));
+  size_t *group_index =
+      (size_t *)swift_malloc("fof_cloud_group_index", num_groups * sizeof(size_t));
+  double *group_centre_of_mass = (double *)swift_malloc(
+      "fof_cloud_group_centre_of_mass", 3 * num_groups * sizeof(double));
+
+  for (int i = 0; i < num_groups; i++) {
+
+    const size_t group_offset = group_sizes[i].index;
+
+    /* Centre of mass, including possible box wrapping */
+    double CoM[3] = {
+        props->group_centre_of_mass[i * 3 + 0] / props->group_mass[i],
+        props->group_centre_of_mass[i * 3 + 1] / props->group_mass[i],
+        props->group_centre_of_mass[i * 3 + 2] / props->group_mass[i]};
+    if (periodic) {
+      CoM[0] =
+          box_wrap(CoM[0] + props->group_first_position[i * 3 + 0], 0., dim[0]);
+      CoM[1] =
+          box_wrap(CoM[1] + props->group_first_position[i * 3 + 1], 0., dim[1]);
+      CoM[2] =
+          box_wrap(CoM[2] + props->group_first_position[i * 3 + 2], 0., dim[2]);
+    }
+
+#ifdef WITH_MPI
+    group_index[i] = parts[group_offset - node_offset_cloud].fof_cloud_data.group_id;
+    group_size[i] = props->group_size[group_offset - node_offset_cloud];
+#else
+    group_index[i] = parts[group_offset].fof_cloud_data.group_id;
+    group_size[i] = props->group_size[group_offset];
+#endif
+
+    group_centre_of_mass[i * 3 + 0] = CoM[0];
+    group_centre_of_mass[i * 3 + 1] = CoM[1];
+    group_centre_of_mass[i * 3 + 2] = CoM[2];
+  }
+
+  swift_free("fof_cloud_group_centre_of_mass", props->group_centre_of_mass);
+  swift_free("fof_cloud_group_size", props->group_size);
+  swift_free("fof_cloud_group_index", props->group_index);
+
+  props->group_centre_of_mass = group_centre_of_mass;
+  props->group_size = group_size;
+  props->group_index = group_index;
 }
 
 struct mapper_data_fof_cloud {
