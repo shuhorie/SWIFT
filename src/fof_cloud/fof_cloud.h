@@ -135,7 +135,7 @@ struct fof_cloud_final_mass {
 /* Struct used to iterate over the hash table and unpack the mass fragments of a
  * group when using MPI */
 struct fof_cloud_mass_send_hashmap {
-  struct fof_final_mass *mass_send;
+  struct fof_cloud_final_mass *mass_send;
   size_t nsend;
 };
 

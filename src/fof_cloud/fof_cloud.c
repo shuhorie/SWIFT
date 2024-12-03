@@ -438,8 +438,8 @@ int cmp_func_cloud_group_size(const void *a, const void *b) {
  *
  * This is almost the same as compare_fof_final_index_global_root() in fof.c
  *
- * @param a The first #fof_final_index object.
- * @param b The second #fof_final_index object.
+ * @param a The first #fof_cloud_final_index object.
+ * @param b The second #fof_cloud_final_index object.
  * @return 1 if the global of the group b is *smaller* than the global group of
  * group a, -1 if a is the smaller one and 0 if they are equal.
  */
@@ -449,6 +449,27 @@ int compare_fof_cloud_final_index_global_root(const void *a, const void *b) {
   if (fof_final_index_b->global_root < fof_final_index_a->global_root)
     return 1;
   else if (fof_final_index_b->global_root > fof_final_index_a->global_root)
+    return -1;
+  else
+    return 0;
+}
+
+/**
+ * @brief Comparison function for qsort call comparing group global roots
+ *
+ * This is almost the same as compare_fof_final_mass_global_root() in fof.c
+ *
+ * @param a The first #fof_cloud_final_mass object.
+ * @param b The second #fof_cloud_final_mass object.
+ * @return 1 if the global of the group b is *smaller* than the global group of
+ * group a, -1 if a is the smaller one and 0 if they are equal.
+ */
+int compare_fof_cloud_final_mass_global_root(const void *a, const void *b) {
+  struct fof_cloud_final_mass *fof_final_mass_a = (struct fof_cloud_final_mass *)a;
+  struct fof_cloud_final_mass *fof_final_mass_b = (struct fof_cloud_final_mass *)b;
+  if (fof_final_mass_b->global_root < fof_final_mass_a->global_root)
+    return 1;
+  else if (fof_final_mass_b->global_root > fof_final_mass_a->global_root)
     return -1;
   else
     return 0;
@@ -1286,6 +1307,105 @@ void rec_fof_cloud_search_pair_foreign(
 }
 #endif
 
+/* Mapper function to atomically update the group mass array. */
+static INLINE void fof_cloud_update_group_mass_iterator(hashmap_key_t key,
+                                                        hashmap_value_t *value,
+                                                        void *data) {
+
+  double *group_mass = (double *)data;
+
+  /* Use key to index into group mass array. */
+  atomic_add_d(&group_mass[key], value->value_dbl);
+}
+
+/* Mapper function to atomically update the group size array. */
+static INLINE void fof_cloud_update_group_size_iterator(hashmap_key_t key,
+                                                        hashmap_value_t *value,
+                                                        void *data) {
+  long long *group_size = (long long *)data;
+
+  /* Use key to index into group mass array. */
+  atomic_add(&group_size[key], value->value_st);
+}
+
+/**
+ * @brief Mapper function to calculate the group masses.
+ *
+ * @param map_data An array of #part%s.
+ * @param num_elements Chunk size.
+ * @param extra_data Pointer to a #space.
+ */
+void fof_cloud_calc_group_mass_mapper(void *map_data, int num_elements,
+                                      void *extra_data) {
+
+  /* Retrieve mapped data. */
+  struct space *s = (struct space *)extra_data;
+  struct part *parts = (struct part *)map_data;
+  double *group_mass = s->e->fof_cloud_properties->group_mass;
+  long long *group_size = s->e->fof_cloud_properties->final_group_size;
+  const size_t group_id_default = s->e->fof_cloud_properties->group_id_default;
+  const size_t group_id_offset = s->e->fof_cloud_properties->group_id_offset;
+
+  /* Create hash table */
+  hashmap_t map;
+  hashmap_init(&map);
+
+  /* Loop over particles and increment the group mass for groups above
+   * min_group_size. */
+  for (int ind = 0; ind < num_elements; ind++) {
+
+    /* Only check groups above the minimum size. */
+    if (parts[ind].fof_cloud_data.group_id != group_id_default) {
+
+      hashmap_key_t index =
+          parts[ind].fof_cloud_data.group_id - group_id_offset;
+      hashmap_value_t *data = hashmap_get(&map, index);
+
+      /* Update group mass */
+      if (data != NULL) {
+        (*data).value_dbl += parts[ind].mass;
+        (*data).value_st++;
+      } else
+        error("Couldn't find key (%zu) or create new one.", index);
+    }
+  }
+
+  /* Update the group mass array. */
+  if (map.size > 0) {
+    hashmap_iterate(&map, fof_cloud_update_group_mass_iterator, group_mass);
+    hashmap_iterate(&map, fof_cloud_update_group_size_iterator, group_size);
+  }
+
+  hashmap_free(&map);
+}
+
+#ifdef WITH_MPI
+/* Mapper function to unpack hash table into array. */
+void fof_cloud_unpack_group_mass_mapper(hashmap_key_t key, hashmap_value_t *value,
+                                        void *data) {
+
+  struct fof_cloud_mass_send_hashmap *fof_cloud_mass_send =
+      (struct fof_cloud_mass_send_hashmap *)data;
+  struct fof_cloud_final_mass *mass_send = fof_cloud_mass_send->mass_send;
+  size_t *nsend = &fof_cloud_mass_send->nsend;
+
+  /* Store elements from hash table in array. */
+  mass_send[*nsend].global_root = key;
+  mass_send[*nsend].group_mass = value->value_dbl;
+  mass_send[*nsend].final_group_size = value->value_ll;
+  mass_send[*nsend].first_position[0] = value->value_array2_dbl[0];
+  mass_send[*nsend].first_position[1] = value->value_array2_dbl[1];
+  mass_send[*nsend].first_position[2] = value->value_array2_dbl[2];
+  mass_send[*nsend].centre_of_mass[0] = value->value_array_dbl[0];
+  mass_send[*nsend].centre_of_mass[1] = value->value_array_dbl[1];
+  mass_send[*nsend].centre_of_mass[2] = value->value_array_dbl[2];
+  mass_send[*nsend].max_part_density_index = value->value_st;
+  mass_send[*nsend].max_part_density = value->value_flt;
+
+  (*nsend)++;
+}
+#endif /* WITH_MPI */
+
 /**
  * @brief Calculates the total mass and CoM of each group above min_group_size
  * and finds the densest particle.
@@ -1297,7 +1417,343 @@ void fof_cloud_calc_group_mass(struct fof_cloud_props *props, const struct space
                                size_t *restrict first_on_node,
                                double *restrict group_mass) {
 
-  printf("fof_cloud_calc_group_mass()\n");
+  const size_t nr_parts = s->nr_parts;
+  struct part *parts = s->parts;
+  const size_t group_id_offset = props->group_id_offset;
+  const size_t group_id_default = props->group_id_default;
+  const int periodic = s->periodic;
+  const double dim[3] = {s->dim[0], s->dim[1], s->dim[2]};
+
+#ifdef WITH_MPI
+  size_t *group_index = props->group_index;
+  const int nr_nodes = s->e->nr_nodes;
+
+  /* Direct pointers to the arrays */
+  long long *max_part_density_index = props->max_part_density_index;
+  float *max_part_density = props->max_part_density;
+  double *centre_of_mass = props->group_centre_of_mass;
+  double *first_position = props->group_first_position;
+  long long *final_group_size = props->final_group_size;
+
+  /* Start the hash map */
+  hashmap_t map;
+  hashmap_init(&map);
+
+  /* Collect information about the local particles and update the local AND
+   * foreign group fragments */
+  for (size_t i = 0; i < nr_parts; i++) {
+
+    /* Ignore inhibited particles */
+    if (parts[i].time_bin >= time_bin_inhibited) continue;
+
+    /* Check whether we ignore this particle type altogether */
+    // Here we do not use if-statement since pi is already comfirmed to be
+    // a hydro particle
+
+    /* Check density threshold */
+    if (parts[i].rho < props->rho_min) continue;
+
+    /* Check if the particle is in a group above the threshold. */
+    if (parts[i].fof_cloud_data.group_id != group_id_default) {
+
+      const size_t root = fof_cloud_find_global(i, group_index, nr_parts);
+
+      if (is_local_fof_cloud(root, nr_parts)) {
+
+        /* The root is local */
+
+        const size_t index =
+            parts[i].fof_cloud_data.group_id - group_id_offset - num_groups_prev;
+
+        /* Updata group mass */
+        group_mass[index] += parts[i].mass;
+
+        /* Updata group size */
+        final_group_size[index]++;
+      } else {
+
+        /* The root is *not* local */
+
+        /* Get the root in the foreign hashmap (create if necessary) */
+        hashmap_value_t *const data = hashmap_get(&map, (hashmap_key_t)root);
+        if (data == NULL)
+          error("Couldn't find key (%zu) or create new one.", root);
+
+        /* Compute the centre of mass */
+        const double mass = parts[i].mass;
+        double x[3] = {parts[i].x[0], parts[i].x[1], parts[i].x[2]};
+
+        /* Add mass fragments of groups */
+        data->value_dbl += mass;
+
+        /* Increase fragments size */
+        data->value_ll++;
+
+        /* Record the first particle of this fragment that we encounter so we
+         * can use it as reference frame for the centre of mass calculation
+         */
+        if (data->value_array2_dbl[0] == (double)(-FLT_MAX)) {
+          data->value_array2_dbl[0] = parts[i].x[0];
+          data->value_array2_dbl[1] = parts[i].x[1];
+          data->value_array2_dbl[2] = parts[i].x[2];
+        }
+
+        if (periodic) {
+          x[0] = nearest(x[0] - data->value_array2_dbl[0], dim[0]);
+          x[1] = nearest(x[1] - data->value_array2_dbl[1], dim[1]);
+          x[2] = nearest(x[2] - data->value_array2_dbl[2], dim[2]);
+        }
+
+        data->value_array_dbl[0] += mass * x[0];
+        data->value_array_dbl[1] += mass * x[1];
+        data->value_array_dbl[2] += mass * x[2];
+
+        /* Also accumulate the densest gas particle ans its index */
+        /* Update index if a denser gas particle is found */
+        if (parts[i].rho > data->value_flt) {
+          data->value_flt = parts[i].rho;
+          data->value_st = i;
+        }
+
+      } /* Foreign root */
+    } /* Particle is in a group */
+  } /* Loop over particles */
+
+  size_t nsend = map.size;
+  struct fof_cloud_mass_send_hashmap hashmap_mass_send = {NULL, 0};
+
+  /* Allocate and initialise a mass array */
+  if (posix_memalign((void **)&hashmap_mass_send.mass_send, 32,
+                     nsend * sizeof(struct fof_cloud_final_mass)) != 0)
+    error("Failed to allocate list of group masses for FOF cloud search.");
+
+  struct fof_cloud_final_mass *fof_cloud_mass_send = hashmap_mass_send.mass_send;
+
+  /* Unpack mass fragments and roots from hash table */
+  if (map.size > 0)
+    hashmap_iterate(&map, fof_cloud_unpack_group_mass_mapper, &hashmap_mass_send);
+
+  nsend = hashmap_mass_send.nsend;
+
+#ifdef SWIFT_DEBUG_CHECKS
+  if (nsend != map.size)
+    error("No. of mass fragments to send != elements in hash table.");
+#endif
+
+  hashmap_free(&map);
+
+  /* Sort by global root - this puts the groups in order of which node they're
+   * stored on */
+  qsort(fof_cloud_mass_send, nsend, sizeof(struct fof_cloud_final_mass),
+        compare_fof_cloud_final_mass_global_root);
+
+  /* Determine how many entries go to each node */
+  int *sendcount = (int *)calloc(nr_nodes, sizeof(int));
+  int dest = 0;
+  for (size_t i = 0; i < nsend; i++) {
+    while ((fof_cloud_mass_send[i].global_root >=
+            first_on_node[dest] + num_on_node[dest]) ||
+           (num_on_node[dest] == 0))
+      dest++;
+
+    if (dest >= nr_nodes) error("Node index out of range!");
+
+    sendcount[dest]++;
+  }
+
+  int *recvcount = NULL, *sendoffset = NULL, *recvoffset = NULL;
+  size_t nrecv = 0;
+
+  fof_cloud_compute_send_recv_offsets(nr_nodes, sendcount, &recvcount, &sendoffset,
+                                      &recvoffset, &nrecv);
+
+  struct fof_cloud_final_mass *fof_cloud_mass_recv =
+      (struct fof_cloud_final_mass *)malloc(nrecv * sizeof(struct fof_cloud_final_mass));
+
+  /* Exchange group mass */
+  MPI_Alltoallv(fof_cloud_mass_send, sendcount, sendoffset, fof_cloud_final_mass_type,
+                fof_cloud_mass_recv, recvcount, recvoffset, fof_cloud_final_mass_type,
+                MPI_COMM_WORLD);
+
+  /* For each received global root, look up the group ID we assigned and
+   * increment the group mass */
+  for (size_t i = 0; i < nrecv; i++) {
+#ifdef SWIFT_DEBUG_CHECKS
+    if ((fof_cloud_mass_recv[i].global_root < node_offset_cloud) ||
+        (fof_cloud_mass_recv[i].global_root >= node_offset_cloud + nr_parts)) {
+      error("Received global root index out of range!");
+    }
+#endif
+    const size_t local_root_index = fof_cloud_mass_recv[i].global_root - node_offset_cloud;
+    const size_t local_group_offset = group_id_offset + num_groups_prev;
+    const size_t index =
+        parts[local_root_index].fof_cloud_data.group_id - local_group_offset;
+    group_mass[index] += fof_cloud_mass_recv[i].group_mass;
+    final_group_size[index] += fof_cloud_mass_recv[i].final_group_size;
+  }
+
+  /* Loop over particles, densest particle in each *local* group.
+   * We can do this now as we eventually have the total group mass */
+  for (size_t i = 0; i < nr_parts; i++) {
+
+    /* Ignore inhibited particles */
+    if (parts[i].time_bin >= time_bin_inhibited) continue;
+
+    /* Check whether we ignore this particle type altogether */
+    // Here we do not use if-statement since pi is already comfirmed to be
+    // a hydro particle
+
+    /* Check density threshold */
+    if (parts[i].rho < props->rho_min) continue;
+
+    /* Only check groups above the minimum mass threshold */
+    if (parts[i].fof_cloud_data.group_id != group_id_default) {
+
+      const size_t root = fof_cloud_find_global(i, group_index, nr_parts);
+
+      if (is_local_fof_cloud(root, nr_parts)) {
+
+        const size_t index =
+            parts[i].fof_cloud_data. group_id - group_id_offset - num_groups_prev;
+
+        /* Compute the center of mass */
+        const double mass = parts[i].mass;
+        double x[3] = {parts[i].x[0], parts[i].x[1], parts[i].x[2]};
+
+        /* Record the first particle of this group that we encounter so we
+         * can use it as reference frame for the centre of mass calculation */
+        if (first_position[index * 3 + 0] == (double)(-FLT_MAX)) {
+          first_position[index * 3 + 0] = x[0];
+          first_position[index * 3 + 1] = x[1];
+          first_position[index * 3 + 2] = x[2];
+        }
+
+        if (periodic) {
+          x[0] = nearest(x[0] - first_position[index * 3 + 0], dim[0]);
+          x[1] = nearest(x[1] - first_position[index * 3 + 1], dim[1]);
+          x[2] = nearest(x[2] - first_position[index * 3 + 2], dim[2]);
+        }
+
+        centre_of_mass[index * 3 + 0] += mass * x[0];
+        centre_of_mass[index * 3 + 1] += mass * x[1];
+        centre_of_mass[index * 3 + 2] += mass * x[2];
+
+        /* Update index if a denser gas particle is found. */
+        if (parts[i].rho > max_part_density[index]) {
+          max_part_density_index[index] = i;
+          max_part_density[index] = parts[i].rho;
+        }
+      }
+    }
+  }
+
+  /* For each received global root, look up the group ID we assigned and find
+   * the global maximum gas density */
+  for (size_t i = 0; i < nrecv; i++) {
+
+    const size_t local_root_index =
+        fof_cloud_mass_recv[i].global_root - node_offset_cloud;
+    const size_t local_group_offset = group_id_offset + num_groups_prev;
+    const size_t index =
+        parts[local_root_index].fof_cloud_data.group_id - local_group_offset;
+
+    double fragment_mass = fof_cloud_mass_recv[i].group_mass;
+    double fragment_centre_of_mass[3] = {
+        fof_cloud_mass_recv[i].centre_of_mass[0] / fof_cloud_mass_recv[i].group_mass,
+        fof_cloud_mass_recv[i].centre_of_mass[1] / fof_cloud_mass_recv[i].group_mass,
+        fof_cloud_mass_recv[i].centre_of_mass[2] / fof_cloud_mass_recv[i].group_mass};
+    fragment_centre_of_mass[0] += fof_cloud_mass_recv[i].first_position[0];
+    fragment_centre_of_mass[1] += fof_cloud_mass_recv[i].first_position[1];
+    fragment_centre_of_mass[2] += fof_cloud_mass_recv[i].first_position[2];
+
+    if (periodic) {
+      fragment_centre_of_mass[0] = nearest(
+          fragment_centre_of_mass[0] - first_position[3 * index + 0], dim[0]);
+      fragment_centre_of_mass[1] = nearest(
+          fragment_centre_of_mass[1] - first_position[3 * index + 1], dim[1]);
+      fragment_centre_of_mass[2] = nearest(
+          fragment_centre_of_mass[2] - first_position[3 * index + 2], dim[2]);
+    }
+
+    centre_of_mass[index * 3 + 0] += fragment_mass * fragment_centre_of_mass[0];
+    centre_of_mass[index * 3 + 1] += fragment_mass * fragment_centre_of_mass[1];
+    centre_of_mass[index * 3 + 2] += fragment_mass * fragment_centre_of_mass[2];
+  }
+
+  /* Send the result back */
+  MPI_Alltoallv(fof_cloud_mass_recv, recvcount, recvoffset, fof_cloud_final_mass_type,
+                fof_cloud_mass_send, sendcount, sendoffset, fof_cloud_final_mass_type,
+                MPI_COMM_WORLD);
+
+  free(sendcount);
+  free(recvcount);
+  free(sendoffset);
+  free(recvoffset);
+  free(fof_cloud_mass_send);
+  free(fof_cloud_mass_recv);
+
+#else
+
+  /* Increment the group mass for groups above min_group_size. */
+  threadpool_map(&s->e->threadpool, fof_cloud_calc_group_mass_mapper, parts,
+                 nr_parts, sizeof(struct part), threadpool_auto_chunk_size,
+                 (struct space *)s);
+
+  /* Direct pointers to the arrays */
+  long long *max_part_density_index = props->max_part_density_index;
+  float *max_part_density = props->max_part_density;
+  double *centre_of_mass = props->group_centre_of_mass;
+  double *first_position = props->group_first_position;
+
+  /* Loop over particles, compute CoM and find the densest particle in each
+   * group. */
+  for (size_t i = 0; i < nr_parts; i++) {
+
+    /* Ignore inhibited particles */
+    if (parts[i].time_bin >= time_bin_inhibited) continue;
+
+    /* Check whether we ignore this particle type altogether */
+    // Here we do not use if-statement since pi is already comfirmed to be
+    // a hydro particle
+
+    /* Check density threshold */
+    if (parts[i].rho < props->rho_min) continue;
+
+    const size_t index = parts[i].fof_cloud_data.group_id - group_id_offset;
+
+    /* Only check groups above the minimum mass threshold. */
+    if (parts[i].fof_cloud_data.group_id != group_id_default) {
+
+      /* Compute the centre of mass */
+      const double mass = parts[i].mass;
+      double x[3] = {parts[i].x[0], parts[i].x[1], parts[i].x[2]};
+
+      /* Record the first particle of this group that we encounter so we
+       * can use it as reference frame for the centre of mass calculation */
+      if (first_position[index * 3 + 0] == (double)(-FLT_MAX)) {
+        first_position[index * 3 + 0] = x[0];
+        first_position[index * 3 + 1] = x[1];
+        first_position[index * 3 + 2] = x[2];
+      }
+
+      if (periodic) {
+        x[0] = nearest(x[0] - first_position[index * 3 + 0], dim[0]);
+        x[1] = nearest(x[1] - first_position[index * 3 + 1], dim[1]);
+        x[2] = nearest(x[2] - first_position[index * 3 + 2], dim[2]);
+      }
+
+      centre_of_mass[index * 3 + 0] += mass * x[0];
+      centre_of_mass[index * 3 + 1] += mass * x[1];
+      centre_of_mass[index * 3 + 2] += mass * x[2];
+
+      /* Update index if a denser gas particle is found. */
+      if (parts[i].rho > max_part_density[index]) {
+        max_part_density[index] = parts[i].rho;
+        max_part_density_index[index] = i;
+      }
+    }
+  }
+#endif /* WITH_MPI */
 }
 
 /**
