@@ -158,11 +158,11 @@ SPHM1RT_RT_SOURCES += rt/SPHM1RT/rt_rate_equations.c
 SPHM1RT_RT_SOURCES += rt/SPHM1RT/rt_cooling.c
 endif
 
-#source files for FoF cloud finding
+# source files for FoF cloud finding
 FOF_CLOUD_SOURCES =
-if HAVE_FOF_CLOUD
-FOF_CLOUD_SOURCES += fof_cloud/fof_cloud.c fof_cloud/engine_fof_cloud.c
-endif
+# if HAVE_FOF_CLOUD
+FOF_CLOUD_SOURCES += fof_cloud/fof_cloud.c engine_fof_cloud.c
+# endif
 
 # Common source files
 AM_SOURCES = space.c space_rebuild.c space_regrid.c space_unique_id.c 
